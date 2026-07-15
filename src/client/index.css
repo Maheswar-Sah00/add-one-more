@@ -1,0 +1,17 @@
+@import 'tailwindcss';
+
+/* Lock the webview to the post viewport: full-height mount, never scroll the
+   page (the game canvas + DOM HUD manage their own layout). */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+canvas {
+  display: block;
+  touch-action: none;
+}
