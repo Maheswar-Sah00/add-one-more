@@ -3,6 +3,7 @@ import type { PlayerDailyState, TowerState } from '../../shared/types';
 import {
   LAYOUT_BREAKPOINT,
   MAX_ATTEMPTS,
+  MAX_PLACEMENTS,
   canStartAttempt,
   contributionStatus,
   dailyTitle,
@@ -21,7 +22,7 @@ function makeTower(over: Partial<TowerState['meta']> = {}, bodies: TowerState['b
   return {
     meta: {
       towerId: 't3_x', postId: 't3_x', dayKey: '2026-07-15', version: 1, status: 'active',
-      seed: 's', modifierId: 'normal', themeId: 'warehouse', createdAt: 0, endsAt: 0,
+      seed: 's', modifierId: 'normal', themeId: 'warehouse', createdAt: 0, endsAt: 0, finalizedAt: 0,
       height: 128, successfulPlacements: bodies.length, uniqueContributors: 1, milestonesUnlocked: [],
       ...over,
     },
@@ -33,6 +34,7 @@ function makeTower(over: Partial<TowerState['meta']> = {}, bodies: TowerState['b
 function player(over: Partial<PlayerDailyState> = {}): PlayerDailyState {
   return {
     userId: 't2_alice', username: 'alice', attemptsUsed: 0, attemptsRemaining: 3,
+    successfulPlacements: 0, placementsRemaining: 3,
     hasSucceeded: false, successfulPlacementId: null, score: 0, ...over,
   };
 }
@@ -73,8 +75,27 @@ describe('deriveLaunchState — every required screen state', () => {
   it('unauthenticated may inspect but not contribute', () => {
     expect(deriveLaunchState({ ...READY, authenticated: false })).toBe('unauthenticated');
   });
-  it('already contributed', () => {
-    expect(deriveLaunchState({ ...READY, player: player({ hasSucceeded: true }) })).toBe('contributed');
+  it('placed all objects → contributed (a single success no longer locks out)', () => {
+    // One success still leaves placement slots, so the player stays "ready".
+    expect(
+      deriveLaunchState({
+        ...READY,
+        player: player({ hasSucceeded: true, successfulPlacements: 1, placementsRemaining: 2 }),
+      })
+    ).toBe('ready');
+    // Using every placement slot is what marks the player "contributed".
+    expect(
+      deriveLaunchState({
+        ...READY,
+        player: player({
+          hasSucceeded: true,
+          successfulPlacements: 3,
+          placementsRemaining: 0,
+          attemptsRemaining: 0,
+          attemptsUsed: 3,
+        }),
+      })
+    ).toBe('contributed');
   });
   it('out of attempts', () => {
     expect(deriveLaunchState({ ...READY, player: player({ attemptsRemaining: 0, attemptsUsed: 3 }) })).toBe('no-attempts');
@@ -111,7 +132,15 @@ describe('tower header + stats + empty state', () => {
 
   it('contribution status reflects the state', () => {
     expect(contributionStatus('ready', player({ attemptsRemaining: 2 }))).toBe(`2 of ${MAX_ATTEMPTS} attempts left today`);
+    // After a first success, ready copy reflects remaining placement slots.
+    const partial = contributionStatus(
+      'ready',
+      player({ attemptsRemaining: 2, successfulPlacements: 1, placementsRemaining: 2 })
+    );
+    expect(partial).toContain('1 placed');
+    expect(partial).toContain('2 more objects');
     expect(contributionStatus('contributed', player())).toContain('in today');
+    expect(contributionStatus('contributed', player())).toContain(String(MAX_PLACEMENTS));
     expect(contributionStatus('unauthenticated', null)).toContain('Sign in');
   });
 });

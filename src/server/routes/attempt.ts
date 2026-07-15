@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { context, reddit } from '@devvit/web/server';
+import { context, reddit, redis } from '@devvit/web/server';
 import type {
   ErrorResponse,
   FailResponse,
@@ -9,8 +9,10 @@ import { RULES } from '../../shared/config';
 import { createAttempt, loadAttempt, newAttemptId, setAttemptStatus } from '../core/attempt';
 import { issueChoices } from '../core/choices';
 import { asString, isRecord } from '../core/json';
+import { k } from '../core/keys';
+import { finalizeIfDue } from '../core/lifecycle';
 import { canContribute, consumeAttempt, loadPlayer } from '../core/player';
-import { ensureTower } from '../core/tower';
+import { ensureTower, loadMeta } from '../core/tower';
 
 export const attempt = new Hono();
 
@@ -26,8 +28,12 @@ attempt.post('/start', async (c) => {
   }
 
   const now = Date.now();
-  const meta = await ensureTower(postId, now);
-  if (meta.status !== 'active') {
+  await ensureTower(postId, now);
+  // End-of-day rule (§16): finalize a due tower first so no new attempt starts
+  // once the day has ended.
+  await finalizeIfDue(postId, now);
+  const meta = (await loadMeta(postId)) ?? (await ensureTower(postId, now));
+  if (meta.status !== 'active' || now >= meta.endsAt) {
     return c.json<ErrorResponse>(err('no-tower', 'This tower has closed'), 409);
   }
   if (meta.successfulPlacements >= RULES.maxObjectsPerTower) {
@@ -36,9 +42,9 @@ attempt.post('/start', async (c) => {
 
   const username = context.username ?? (await reddit.getCurrentUsername()) ?? 'anonymous';
   const player = await loadPlayer(postId, userId, username);
-  if (player.hasSucceeded) {
+  if (player.placementsRemaining <= 0) {
     return c.json<ErrorResponse>(
-      err('already-succeeded', 'You already added your object today'),
+      err('already-succeeded', 'You’ve already placed all of today’s objects'),
       409
     );
   }
@@ -90,5 +96,7 @@ attempt.post('/fail', async (c) => {
   const username = context.username ?? (await reddit.getCurrentUsername()) ?? 'anonymous';
   await setAttemptStatus(record, 'failed');
   const player = await consumeAttempt(postId, userId, username);
+  // A failed drop also spends one official attempt (§17 total-attempts stat).
+  await redis.incrBy(k.attemptCount(record.towerId), 1);
   return c.json<FailResponse>({ type: 'fail', player });
 });

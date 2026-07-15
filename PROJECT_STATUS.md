@@ -695,6 +695,521 @@ responsive logic covered by `layoutMode` + state tests.
 
 ---
 
+## Task 11 — First-Time Experience and Object Selection (three-step tutorial + rich choice cards)
+
+Added the onboarding tutorial and upgraded the object-selection screen to show
+personality and a visual preview, while keeping all physics numbers hidden.
+
+**Three-step tutorial (`src/client/state/tutorial.ts` + `Tutorial` in `game.tsx`):**
+- Exactly **three** steps (the required maximum), with the required headlines:
+  1. "Everyone is building the same tower."
+  2. "Choose one object. Position it. Rotate it. Drop it."
+  3. "If it stays up, it becomes the next player's problem."
+- **Visual demonstrations, not a rule page:** each step renders a small inline SVG
+  (`TutorialVisual`) — shared tower + contributors, rotate/drop arrows, and a
+  "it stays ✓" tower — with one short caption each (≤90 chars, enforced by test).
+- **Skippable** at any point (Skip button); progress dots; Back/Next; the last step
+  is "Start building".
+- **Does not re-interrupt returning users.** Auto-shown once per player, gated by a
+  disposable `omt.tutorial.seen.v1` preference. A `tutorialEvaluatedRef` guard means
+  a retry/re-bootstrap never re-triggers it within a session.
+- **Works without local storage.** `resolveStorage()` probes localStorage (write
+  test) and returns null when blocked/private; reads/writes then fall back to a
+  session in-memory map and **never throw**. Without persistence the game still
+  runs; it just can't remember across sessions.
+- **How It Works replay:** the launch screen's "How it works" button reopens the
+  same tutorial (replaces the old static 3-line modal from Task 10).
+
+**Object-selection screen (`src/client/state/selection.ts` + `objectPreview.ts`):**
+- `selectionCards(choices)` builds player-safe cards from the three server-issued
+  choices, each showing **name, visual preview, Safe/Risky/Absurd label, base
+  score, and a short humorous blurb** (sourced from the catalogue `blurb`).
+- **Visual preview** via `buildPreview(objectId)`: converts the object's collision
+  geometry into centered SVG primitives (rect / circle / compound rects / polygon)
+  using the catalogue fill/stroke colours — rendered by `ObjectPreviewSvg`.
+- **No mass / friction / physics numbers** are ever placed on a card (asserted by a
+  test that scans the serialized cards for banned keys).
+- **Clear selected state + direct transition:** `tapCard` reducer models the mobile
+  flow — first tap selects (orange ring + `aria-pressed`), tapping the selected card
+  again (or the **PLACE IT** button) confirms and goes **straight into placement
+  mode**. Mobile column layout, desktop row (`sm:` breakpoint).
+
+**Tests (23 new):**
+- `tutorial.test.ts` (9): three-step cap + exact headlines, short captions, step
+  clamping/last-step, persisted seen round-trip, **graceful degradation with no
+  storage and with throwing storage**, fresh-session-starts-unseen.
+- `selection.test.ts` (14): card mapping incl. blurb/label/score, **"never leaks
+  physics numbers"**, unknown-id blurb fallback, **tap-to-select/confirm/switch
+  interaction**, preview geometry per shape kind (rect/circle/compound/poly),
+  colour hex, in-bounds coords, unknown-id → null.
+
+**Checks:** type-check ✅ · **test ✅ (85/85: 62 prior + 9 tutorial + 14 selection)**
+· build ✅. Visual polish of the tutorial illustrations and the tap-to-place feel
+remain a **live-playtest** confirmation (below).
+
+---
+
+## Task 13 — Server-Controlled Scoring, Milestones & Leaderboards
+
+Made scoring fully server-authoritative, added the five community milestones, and
+built five secondary leaderboards — while keeping the shared tower the hero.
+
+**Server-controlled scoring (`src/server/core/scoring.ts`):**
+- Base scores come from the catalogue: **Safe 100 / Risky 175 / Absurd 275**.
+- `computeScoreBreakdown(objectId, y, { modifierId, milestoneReached })` returns
+  `{ base, heightBonus, modifierBonus, milestoneBonus, total }` — **the only
+  source of score truth.** The `CommitRequest` has no score field; even a client
+  that injects `score`/`points` is ignored (test-proven).
+- **Height bonus:** `round(heightAbove * 0.5)`, capped at 400.
+- **Daily-modifier bonus (placeholder):** `modifierBonus(id, subtotal)` reads the
+  `MODIFIERS` registry; `normal` contributes 0. Real modifiers (flat + multiplier)
+  plug in via config with no pipeline changes.
+- **Milestone bonus:** +150 folded into the score of the placement that crosses a
+  milestone.
+
+**Community milestones (`src/shared/milestones.ts`):** the five required —
+5 "It's officially a tower.", 10 "Questionable engineering.", 20 "Local landmark.",
+35 "Physics is concerned.", 50 "Community miracle."
+- `newlyReached(prev, next)` decides what a single commit crosses; `milestoneIdsUpTo`
+  writes the authoritative unlocked set into `meta.milestonesUnlocked` (monotonic
+  from the count → **idempotent**, so a refresh re-derives the same set and crosses
+  nothing). The commit response carries `milestone` **only** on the crossing commit;
+  the idempotent replay and bootstrap carry `null` / no flag, so it **never
+  re-triggers** after refresh or a duplicate request.
+
+**Five secondary leaderboards (`src/server/core/leaderboards.ts`, `GET /api/leaderboard`):**
+- `today-score` (per-tower cumulative), `top-placement` (per-tower best single),
+  `most-absurd` (all-time absurd count), `streak` (all-time consecutive-day builder
+  streak), `all-time` (all-time placements).
+- Reads use `redis.zRange(key, 0, limit-1, { by: 'rank', reverse: true })` — top-N,
+  highest first. `clampLimit` enforces default 10 / max 50 (`?limit=`), so Redis
+  result sizes stay bounded (§14).
+- **No internal ids exposed:** entries are `{ rank, username, value, isViewer }`.
+  Usernames resolve from a global `user:names` map; `isViewer` is computed
+  server-side so the client never needs a user id (test scans the payload for
+  `t2_` and finds none).
+- All leaderboard + streak/total/absurd counters are written **inside the existing
+  WATCH/MULTI/EXEC commit transaction**, so they stay consistent with the placement
+  and a conflict/duplicate writes nothing.
+
+**Redis API discipline:** verified `zRange` (with `{ by, reverse, limit }`), `zAdd`,
+`zIncrBy`, `zScore`, `zCard` against the installed `@devvit/redis` 0.13.8 type defs
+before use — no invented functions.
+
+**Client (kept the tower dominant):** milestone **celebration** overlay fires once
+on the flagged commit; a subtle `🏆 <current milestone>` **community status** line
+sits in the compact header; **Leaderboards** is a small secondary button opening a
+modal (not a front-and-center board). Own row is highlighted; only usernames shown.
+
+**Tests (19 new, 104 total):**
+- `scoring.test.ts` (core, 12): base tiers, height cap, **modifier placeholder = 0**,
+  milestone bonus, total = sum, milestone thresholds + exact copy, `newlyReached`
+  fires once, streak increments/resets + previous-day-key across month/year.
+- `scoring.test.ts` (routes, 7): **client-injected score ignored → server value
+  saved**, non-issued object rejected, milestone celebrated exactly on the 5th
+  object, **no re-trigger on refresh**, **no re-award on duplicate commit**,
+  leaderboards ranked high-to-low with **no id leak**, and limit honoured.
+
+**Checks:** type-check ✅ · lint ✅ · **test ✅ (104/104)** · build ✅.
+
+**Playtest gate (un-automatable):** confirm the celebration animation feels good,
+the leaderboard stays visually secondary to the tower, and streaks roll correctly
+across real day boundaries.
+
+---
+
+## Task 15 — Practice Mode (client-only sandbox over a copy of the tower)
+
+Added a fully **local** Practice Mode: unlimited placement with the same physics
+and controls, success + collapse, restore-on-collapse — and **zero server
+contact**, so it can never move the official tower, attempts, milestones,
+leaderboards, or streaks.
+
+**How it stays safe (architecture):** Practice reuses the exact same `TowerScene`
+physics/controls. The difference is entirely in React: `handleSettle` checks a
+`practiceRef` first and, when practicing, resolves the drop with **no `fetch`** —
+it calls only the new local scene command `commitLocal()` (keep the settled body)
+or lets the scene's existing collapse-restore run. There is **no practice API
+endpoint and no practice commit builder anywhere** — practice literally cannot
+emit a commit request.
+
+**Client:**
+- `src/client/state/practice.ts` — pure session model: `startPractice(tower)`
+  deep-copies the accepted bodies (a local copy), `recordPractice` appends on
+  "stayed" (unlimited stacking) and leaves the snapshot untouched on "collapsed"
+  (restored), plus the exact banner constant.
+- `TowerScene.commitLocal()` promotes the just-settled active body into the local
+  accepted list using its settled transform — client state only, no Redis write.
+- `game.tsx` — enter from a **🧪 Practice Mode** button on the launch panel
+  (shown in every playable state, so it's usable **after official success and
+  after all attempts are consumed**); an object picker offering **any** of the 15
+  objects; the same rotate/drop controls; the persistent required banner
+  **"Practice — this will not change the community tower."**; a placed/collapse
+  counter; and **Exit** which calls `applyTower(officialTower)` to **reload the
+  official accepted state exactly**, discarding all practice bodies.
+- Practice never starts an official attempt, so no attempt is consumed; the
+  official success/collapse/score panels never render in practice.
+
+**Guarantees (all covered by tests):** no official Redis write · no attempt
+consumed · no milestone/leaderboard/streak change · never claims practice was
+saved (banner + "practice only" copy) · restore after collapse · usable after
+success and after attempts are gone.
+
+**Tests (11 new, 115 total):**
+- `practice.test.ts` (client, 7): exact banner, **local copy is a deep copy**
+  (mutating the session never touches the official tower), append-on-stay, **25
+  placements (unlimited)**, **collapse restores the snapshot**, defensive no-body
+  case, availability regardless of official state.
+- `practice.test.ts` (routes, 4): **the required proof** — a commit carrying any
+  attempt id that was never server-issued (the only thing a leaked practice
+  action could be) is rejected `attempt-invalid` with the tower version, body
+  count, and attempts **all unchanged**; malformed ids rejected; leaderboards stay
+  empty; and a legitimate token commit still writes (only the official path can).
+
+**Checks:** type-check ✅ · lint ✅ · **test ✅ (115/115)** · build ✅.
+
+**Playtest gate (un-automatable):** confirm practice *feels* identical to the real
+drop, the banner is always visible, stacking many objects performs well, and Exit
+snaps back to the community tower cleanly.
+
+---
+
+## Task 16 — Daily Tower Lifecycle (modifiers, finalization, next-day, scheduler + lazy fallback)
+
+Implemented the full daily lifecycle: server-chosen modifiers, an
+authoritative end time, finalization with a saved summary + awards, and the
+next-day state — with a **lazy fallback** so correctness never depends on the
+scheduler.
+
+**Tower now carries all required fields** (`TowerMeta`): day key, start
+(`createdAt`), server-authoritative end (`endsAt`, drives the countdown), active
+/ finalized status, daily seed, daily modifier, `finalizedAt`, plus a saved
+**final summary** (`TowerFinalSummary`) and **next-day descriptor**
+(`NextDailyState`).
+
+**Daily modifiers (`src/shared/modifiers.ts`) — the four required + Normal:**
+- Normal Day, Low Gravity (`gravityScale 0.55`), Heavy Day (`densityScale 1.7`),
+  Slippery Day (`frictionScale 0.45`).
+- **Chosen server-side, deterministically from the day key** (`pickDailyModifier`)
+  → identical for every player, stable all day, never per-request random.
+- **Physics derived consistently:** `modifierPhysics(id)` gives gravity/density/
+  friction multipliers; `TowerScene` applies gravity on rebuild and `bodyFactory`
+  scales each body's density/friction — every client reproduces the same physics
+  from `meta.modifierId`.
+- **Not random-feeling:** modifiers only scale fixed constants; they add **zero**
+  score randomness (`scoreMultiplier 1`, `scoreFlatBonus 0` — Task 13 scoring
+  unchanged), so outcomes stay skill-based.
+- **Explained before an attempt:** a `ModifierExplainer` line shows the label +
+  one-line description on the launch panel and again in the selection screen, plus
+  a header chip.
+
+**Finalization (`src/server/core/lifecycle.ts`) — idempotent + deterministic:**
+- `finalizeTower(postId, now)`: computes final stats + awards (Top Builder,
+  Highest Object, Boldest Object) from the frozen tower, saves the summary and the
+  next-day descriptor, then flips status to `finalized` **last** (a crash mid-write
+  leaves it active for a later retry). The accepted snapshot is already persisted
+  and never changes once finalized, so it **is** the saved final snapshot.
+- **Repeated finalization is safe:** an already-finalized tower returns its saved
+  summary and mutates nothing (`finalizedAt` stays put) — proven by test.
+- `finalizeIfDue` is called from **bootstrap, attempt/start, and commit**: the
+  **lazy fallback**. If the scheduler never fires, the next request finalizes.
+
+**End-of-day rule (documented):** at finalization new official attempts stop
+immediately (`attempt/start` and `commit` reject once `status==='finalized'` or
+`now>=endsAt`, non-punitively — no attempt consumed). An already-issued attempt
+may still commit only while active; past the end it is refused and simply expires,
+keeping the final snapshot immutable.
+
+**New-day reset + historical validity:** each daily tower is its own post
+(Devvit's post-per-day model), so a new post = fresh eligibility automatically;
+the finalized post keeps its summary + leaderboards untouched forever. Finalization
+also produces the **next daily tower state** (`buildNextDaily`: next day key, seed,
+server-chosen modifier, continuous start/end).
+
+**Scheduler — confirmed API only:** `scheduler.runJob({ name, data, runAt })`
+(verified in installed `@devvit/scheduler` 0.13.8; also `cancelJob`/`listJobs`).
+Best-effort `scheduleDailyFinalize` runs at tower creation, registered in
+`devvit.json` as the `daily-finalize` task → `/internal/scheduler/finalize`. It is
+**advisory** and fully wrapped: any failure is swallowed because lazy finalization
+is authoritative. No invented scheduler functions.
+
+**Tests (17 new, 132 total):**
+- `modifiers.test.ts` (10): four modifiers + physics, **deterministic same-day
+  selection** (all players identical), variety across a month, neutral score.
+- `lifecycle.test.ts` (9 — the required **date-boundary + repeated-finalization**
+  coverage): day-key rollover across month/year/leap-day; required lifecycle
+  fields + `isDue`; finalize saves summary + awards + next-day state; **not before
+  end time**; **idempotent repeated finalization** (later timestamp changes
+  nothing); previous stats persist; empty-tower finalize; a fresh post is an
+  independent active tower; `buildNextDaily`.
+
+**Checks:** type-check ✅ · lint ✅ · **test ✅ (132/132)** · build ✅.
+
+**Playtest gate (un-automatable):** confirm each modifier *feels* right in the real
+Phaser sim (low-gravity float, heavy slam, slippery slide), the countdown reads
+from the server end time, and a real scheduled `daily-finalize` job fires (with the
+lazy fallback as backstop) across an actual day boundary.
+
+---
+
+## Task 17 — Daily Results & Community Monument
+
+Built the finalized-tower results screen, the six deterministic daily awards, a
+personal result, and a lightweight archive of finalized days — all kept secondary
+to today's active tower.
+
+**Results screen (`DailyResults` in `game.tsx`) shows every required field:** the
+final tower (the finalized Phaser tower stays the hero), final height, total
+accepted objects, unique contributors, **total official attempts**, milestones
+reached, daily modifier, **personal result**, the closed countdown state
+("Closed"), and the date. Rendered on the launch screen when the tower is
+finalized, from the `TowerFinalSummary` in bootstrap.
+
+**Total official attempts:** a per-tower counter (`k.attemptCount`) incremented on
+every consumed attempt — a **failed drop** (fail route) and a **success** (inside
+the commit transaction) — surfaced as `summary.totalAttempts`.
+
+**Six deterministic, server-calculated awards (`src/server/core/awards.ts`):**
+Highest Placement, Bravest Builder, Safest Hands, Last Stable Addition, Community
+MVP, Most Absurd Success.
+- **Deterministic:** pure `computeAwards(placements, bodies)`; every tie breaks on
+  the earliest placement (lowest sequenceNumber), so output is stable and
+  order-independent (tested).
+- **Never rewards failure over success:** awards derive ONLY from successful
+  placements — there is no code path that takes failed attempts. A collapse can
+  never win an award.
+- Awards with no eligible placement (e.g. no absurd object) are omitted.
+
+**Personal result (client-side, per-user):** `personalResult()` derives the
+viewer's own object (via their own `ownerUserId` on the redacted tower), score,
+attempts used, and any awards they won (matched by public username) — kept out of
+the shared immutable summary since it differs per user.
+
+**Lightweight archive (community monument):**
+- On finalization, the tower is added to a global archive index
+  (`archive:index` zset by `finalizedAt`) and **trimmed to the most recent 30**
+  (`zRemRangeByRank`) to bound Redis usage. Only the compact `TowerFinalSummary`
+  is stored — **no replay/body data** is archived (the accepted snapshot already
+  persists per-post and is reconstructable by id).
+- `GET /api/archive?limit=` → recent finalized summaries; each archive row shows
+  date, modifier, height, object count, contributor count, and the top award +
+  final milestone. The `ArchiveModal` is a small secondary button, never competing
+  with today's tower.
+
+**Redis-API discipline:** `zRemRangeByRank`, `zRange`, `zAdd` verified against the
+installed `@devvit/redis` 0.13.8 types before use.
+
+**Tests (7 new, 139 total):** `awards.test.ts` — each award to the right
+contributor, **determinism** (identical + shuffled inputs → identical winners),
+tie-break on earliest placement, omitted awards, empty tower, and the explicit
+"awards come only from successful placements, never failures" guarantee.
+(Awards feed `computeSummary`, already covered by `lifecycle.test.ts`.)
+
+**Checks:** type-check ✅ · lint ✅ · **test ✅ (139/139)** · build ✅.
+
+**Playtest gate (un-automatable):** confirm the results screen reads well on a
+finalized tower, the personal result matches your own object, and the archive
+renders past days without crowding today's tower.
+
+---
+
+## Task 18 — Phaser Polish Pass (feel + audio, no rule changes)
+
+Improved moment-to-moment feel without touching any game rule. Physics,
+stability, scoring, and lifecycle are all unchanged.
+
+**Feel (in `TowerScene`):**
+- **Smooth camera tracking** (existing lerp) + **controlled zoom**: the camera now
+  eases *outward* as the tower grows (`zoomLevel` 1 → 0.72, smoothed) so the whole
+  build stays in frame, then eases back — never a lurch.
+- **Impact-based shake** + **slow-motion collapse** (existing) — slow motion
+  ALWAYS resets (`resetTimeScale` in the collapse `finally` **and** on scene
+  SHUTDOWN).
+- **Dust** for heavy non-metal impacts, **small sparks** for metal/glass
+  collisions, **small success particles** (a gentle upward fan replacing the old
+  full-screen flash — **no flashing effects**).
+- **Rotation feedback** (quick scale pulse), **drop feedback** (expanding ring at
+  the release point), **stability tension feedback** (a faint ring on the settling
+  object that shifts green→amber→red with how much the tower is still moving).
+- **Milestone celebration**: React modal (Task 13) now also fires a Phaser particle
+  burst (`bridge.celebrate()`) + a sound.
+
+**Audio (`src/client/phaser/audio.ts`) — fully synthesized, ZERO asset bytes:**
+- Web Audio oscillator voices; **no audio files to download/decode** ("compress
+  assets" taken to its limit).
+- **No autoplay:** the `AudioContext` is created only in `initAudio()`, called from
+  a real user gesture (Add / Drop / unmute). Every play call before that is a no-op.
+- **Material-based collision hooks:** per-material timbre (wood thud … metal ring …
+  glass ping), pitch/gain scaled by impact speed and **gain-capped** so it's never
+  harsh.
+- **Success sound** (two-note flourish) and **layered collapse** (low rumble + mid
+  crack + material impact).
+- **Simultaneous-sound cap** (`MAX_VOICES = 8`) + a per-collision throttle so a
+  chaotic collapse can't stack into noise.
+- **Mute** control (persisted) that ramps the master gain.
+
+**Accessibility / robustness (`src/client/state/settings.ts`):**
+- **Mute** and **reduced-motion** toggles in the HUD, persisted (localStorage with
+  an in-memory fallback — works without storage).
+- **Reduced motion = OS preference ∪ user toggle.** When on, the scene skips shake,
+  slow-mo, particles, tension, rotation/drop pulses (physics/audio unchanged).
+- **Visual equivalents for audio cues:** success → particles, collapse → shake +
+  particles + slow-mo, impacts → dust/sparks, tension → the ring. Nothing is
+  audio-only, so a muted player misses no information.
+- **Do not hide the tower:** all particles are count-limited and low-alpha; dust is
+  faint; the tension ring is a thin low-alpha stroke.
+
+**Tests (10 new, 149 total):**
+- `audio.test.ts` — impact params deterministic, louder/higher with harder hits,
+  gain-capped, per-material timbre, unknown-material fallback, and the
+  simultaneous-voice cap.
+- `settings.test.ts` — mute + reduced-motion round-trip, **works without storage /
+  never throws**, and reduced-motion = OS ∪ user.
+
+**Checks:** type-check ✅ · lint ✅ · **test ✅ (149/149)** · build ✅.
+
+### Performance profile
+
+Honest scope note: I can't run the live Phaser canvas from here, so FPS is a
+**reasoned estimate pending on-device playtest**; asset sizes below are **measured
+from the real build**.
+
+- **Approximate body count (realistic tall tower):** cap is
+  `RULES.maxObjectsPerTower = 60` objects. Many are compound (chair/sofa/bathtub/
+  duck = 3–4 Matter parts each), so a full tower is ≈ **40–60 objects ≈ 120–200
+  Matter sub-bodies** plus one static platform. Matter sleeping is enabled, so a
+  settled tower parks most bodies asleep.
+- **Frame-rate observations (estimate):** desktop should hold 60 fps comfortably;
+  the load spike is the ~1–2 s settling window right after a drop when the top of a
+  tall tower is awake. Particles are short-lived and capped, so effect overhead is
+  small. To be confirmed on a mid-range phone.
+- **Asset sizes (measured, `dist/client`):** `bodyFactory.js` **≈ 1.18 MB**
+  (Phaser engine — the dominant weight), React runtime ≈ 187 KB, `default.js`
+  (splash) ≈ 124 KB, `game.js` ≈ 59 KB, CSS ≈ 30 KB. **Audio: 0 bytes** (synth).
+- **Largest performance risks:** (1) the **Phaser bundle (~1.18 MB)** on first load
+  over mobile data — mitigated by the split entrypoints (splash stays light; Phaser
+  only loads in `game.html`); (2) **compound bodies** multiply the Matter body count
+  ~3× vs. object count — the 60-object cap keeps it bounded; (3) a **collapse of a
+  tall awake tower** is the worst-case physics + particle frame — slow-mo actually
+  helps by spreading it, and reduced-motion removes the particle/shake cost.
+
+**Playtest gate (un-automatable):** real-device FPS on a mid-range phone with a
+40–60 object tower, confirm slow-mo always recovers, audio starts only after a
+gesture, and effects never obscure the build.
+
+---
+
+## Task 19 — Reddit-Native Post Experience
+
+Made the custom post Reddit-native: a useful title, an interactive inline surface,
+a real text fallback, and the daily context — with no external links, no comments,
+and no Reddit-logo imagery.
+
+**Post creation (`src/server/core/post.ts` + pure `src/shared/post.ts`):**
+- **Useful title** in the required format: `buildPostTitle` →
+  `"Day {n}: Can we add one more thing? — {Modifier}"` (e.g. "Day 16: Can we add
+  one more thing? — Low Gravity"). Day number is deterministic from the day key
+  vs. `LAUNCH_DAY_KEY`.
+- **Text fallback** (`textFallback: { text }`, old.reddit / unsupported clients)
+  explaining, in plain markdown, all five required points: same daily tower · one
+  successful object each · placements become the next player's challenge · open in
+  a supported Reddit app · resets daily. Plus the day + modifier, and "no comments
+  required".
+- **postData** carries `{ dayNumber, dayKey, modifierId, endsAt }` (≤2 KB).
+- Created on the **APP account** (no `runAs: 'USER'`, no `addComment`) — the app
+  never posts or comments on a user's behalf.
+
+**Interactive inline surface (`src/client/splash.tsx`, the default entrypoint):**
+now shows the **day number**, the **daily modifier** (label + one-line
+description), live stats, **basic 3-step instructions**, a **live "tower … left"
+countdown** to the daily ending, a big **"Add One More Thing"** CTA that expands
+to the game (`requestExpandedMode('game')`), and a **community call to action**
+("help the community reach the next milestone"). When finalized it flips to "See
+today's results". The leftover **dev launchers were removed** (retiring the last
+temporary UI flagged back in Tasks 10/11).
+
+**Compliance with the "do nots":**
+- **No comments to play / none posted on behalf of users** — the game uses zero
+  comment APIs.
+- **No Reddit logos** — removed the template's `snoo.png` load from
+  `PreloadScene`; the game renders entirely from code-drawn geometry.
+- **No external links** — the fallback is plain text with no URLs (test asserts no
+  `http(s)://`), and the game makes no external requests (Devvit CSP would block
+  them anyway).
+
+**Tests (6 new, 155 total):** `post.test.ts` — day-number math (launch = day 1,
+month/year rollover, clamp/bad-key), title format with modifier, and the fallback
+containing all five required points + day + modifier + "no comments" and **no
+external links**.
+
+**Checks:** type-check ✅ · lint ✅ · **test ✅ (155/155)** · build ✅.
+
+### Verification notes + honest limitation
+
+- **Moderator vs. regular user:** the "Create a new post" mod-menu action and the
+  `onAppInstall` trigger both create the post on the app account; **playing
+  requires no elevated permissions** — any signed-in user can open the post and
+  add an object (unauthenticated users can still inspect, per Task 8). Only post
+  *creation* is mod/app-gated, which is correct.
+- **Desktop vs. mobile / accessibility:** the inline surface and expanded game are
+  the same responsive React/Tailwind UI verified in Tasks 10–11 (mobile-first,
+  `sm:` breakpoints); the text fallback covers old.reddit and any client that
+  can't render the custom post. Rendering *on real Reddit desktop + mobile clients*
+  is the **playtest gate** — it can't be exercised from here.
+- **Automatic daily post creation — honest limitation:** it is **not wired to a
+  cron**. Task 16 finalizes the daily tower and produces the next-day descriptor,
+  but no scheduled job calls `createPost`, because auto-posting on a schedule is
+  exactly the "not fully reliable" case (risk of duplicate/spam posts, and
+  scheduler firing is unverified here). Per the task's allowance, we **preserve one
+  stable public demo post**: a moderator creates a single post via the menu, and it
+  stays valid — its tower runs, finalizes, and shows results. Enabling true daily
+  rotation later is a small, deliberate step (a `daily-post` cron in devvit.json →
+  a route that calls `createPost`, mirroring the `daily-finalize` wiring), left
+  out on purpose until it can be validated against real subreddit behaviour.
+
+---
+
+## UI/UX Pass — Light, friendly "playground" look (visual only)
+
+Restyled the whole game surface to a soft, light, card-based aesthetic (matching a
+provided reference) **without changing any game rule, state machine, or physics
+behaviour** — purely presentation.
+
+**Phaser stage (`TowerScene`, `boot.ts`, `bodyFactory.ts`):**
+- Light background (`#f6f7fc`) instead of the dark theme.
+- A soft **circular "stage" pool** (light lavender), **pastel clouds**, and static
+  **sparkles** behind the tower (no flashing — all static).
+- **White rounded platform** with a soft drop shadow + subtle indigo "side" for a
+  gentle 3D slab feel; removed the old dark "tower area" chrome/label in favour of
+  a soft ground shadow.
+- Each object now casts a **soft drop shadow** so it reads on the light stage
+  (added behind the art in the factory).
+- Camera fit widened (`h/1000`) so the platform, roughly the top three objects, and
+  the incoming object stay framed together.
+
+**React HUD (`game.tsx`, `index.css`):**
+- White **rounded stat card** (indigo numbers, gray labels, dividers) and a
+  matching **"CLOSES IN" countdown card** with a stopwatch — as in the reference.
+- Contribution **status pill** ("✓ Your object is in today's tower") and a
+  prominent white **Leaderboard card** (trophy) as the primary secondary action.
+- Indigo primary buttons, white/indigo secondary controls, and the mute /
+  reduced-motion toggles restyled as light chips.
+- Every gameplay surface converted to the light system: selection cards, placement
+  controls, result/collapse panels, inspection card, tutorial, milestone
+  celebration, leaderboard + archive modals, and the daily-results screen.
+
+**Checks:** type-check ✅ · lint ✅ · **test ✅ (155/155)** · build ✅. (No test
+changes — this pass is visual only; all logic is untouched.)
+
+**Playtest gate (un-automatable):** the exact stage/cloud/sparkle positions,
+object shadow weight, and camera framing are tuned "blind" (I can't render the
+canvas here) — confirm on a real device that the tower sits nicely in the stage,
+light-coloured objects (fridge/bathtub) still read against the pale backdrop, and
+the ~3-objects-visible framing feels right; these are quick constant tweaks in
+`TowerScene` if not.
+
+---
+
 ## Next action (gate before further gameplay work)
 The `🔧 check` dev panel is **gone** (retired in Task 10) — the foundation it
 verified is now exercised by the automated suite. The remaining un-automatable

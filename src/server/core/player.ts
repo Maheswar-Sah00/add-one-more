@@ -9,6 +9,7 @@ export function serializePlayer(p: PlayerDailyState): Record<string, string> {
     userId: p.userId,
     username: p.username,
     attemptsUsed: String(p.attemptsUsed),
+    successfulPlacements: String(p.successfulPlacements),
     hasSucceeded: p.hasSucceeded ? '1' : '0',
     successfulPlacementId: p.successfulPlacementId ?? '',
     score: String(p.score),
@@ -19,7 +20,7 @@ function withDerived(
   userId: string,
   username: string,
   attemptsUsed: number,
-  hasSucceeded: boolean,
+  successfulPlacements: number,
   successfulPlacementId: string | null,
   score: number
 ): PlayerDailyState {
@@ -28,7 +29,9 @@ function withDerived(
     username,
     attemptsUsed,
     attemptsRemaining: Math.max(0, RULES.maxAttemptsPerDay - attemptsUsed),
-    hasSucceeded,
+    successfulPlacements,
+    placementsRemaining: Math.max(0, RULES.maxSuccessesPerDay - successfulPlacements),
+    hasSucceeded: successfulPlacements > 0,
     successfulPlacementId,
     score,
   };
@@ -41,19 +44,27 @@ export async function loadPlayer(
 ): Promise<PlayerDailyState> {
   const h = await redis.hGetAll(k.player(postId, userId));
   const placementId = h.successfulPlacementId;
+  // Back-compat: records written before multi-placement stored only `hasSucceeded`.
+  const successCount =
+    h.successfulPlacements !== undefined
+      ? numStr(h.successfulPlacements, 0)
+      : boolStr(h.hasSucceeded)
+        ? 1
+        : 0;
   return withDerived(
     userId,
     h.username && h.username.length > 0 ? h.username : username,
     numStr(h.attemptsUsed, 0),
-    boolStr(h.hasSucceeded),
+    successCount,
     placementId && placementId.length > 0 ? placementId : null,
     numStr(h.score, 0)
   );
 }
 
-/** Whether the player may start / resolve another official attempt. */
+/** Whether the player may start / resolve another official attempt (§6): they
+ *  must have both a placement slot and an attempt left. */
 export function canContribute(player: PlayerDailyState): boolean {
-  return !player.hasSucceeded && player.attemptsRemaining > 0;
+  return player.placementsRemaining > 0 && player.attemptsRemaining > 0;
 }
 
 /** Consume one attempt after a failed drop (§6). Conflicts do NOT call this. */
@@ -67,7 +78,7 @@ export async function consumeAttempt(
     userId,
     player.username,
     player.attemptsUsed + 1,
-    player.hasSucceeded,
+    player.successfulPlacements,
     player.successfulPlacementId,
     player.score
   );

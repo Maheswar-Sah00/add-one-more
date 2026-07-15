@@ -11,6 +11,11 @@ body,
   overscroll-behavior: none;
 }
 
+/* Light, friendly base — a soft vertical wash behind the game stage. */
+body {
+  background: linear-gradient(180deg, #fbfbfe 0%, #f2f3fb 100%);
+}
+
 canvas {
   display: block;
   touch-action: none;

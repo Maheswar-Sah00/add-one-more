@@ -41,8 +41,9 @@ export class PreloadScene extends Phaser.Scene {
       this.debug.assetsOk = false;
     });
 
-    // Placeholder asset to exercise the loading pipeline (ships with template).
-    this.load.image('snoo', '/snoo.png');
+    // The game renders entirely from code-drawn geometry (Task 18), so there are
+    // no external image assets to load — and deliberately no Reddit-logo imagery
+    // standing in for real design (Task 19).
   }
 
   create(): void {

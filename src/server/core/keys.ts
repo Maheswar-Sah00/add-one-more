@@ -7,8 +7,26 @@ export const k = {
   version: (postId: string): string => `tower:${postId}:version`,
   snapshot: (postId: string): string => `tower:${postId}:snapshot`,
   placements: (postId: string): string => `tower:${postId}:placements`,
+  /** Immutable final summary, saved once at finalization. */
+  summary: (postId: string): string => `tower:${postId}:summary`,
+  /** Next daily tower's initial-state descriptor, produced at finalization. */
+  nextDaily: (postId: string): string => `tower:${postId}:next`,
+  /** Total official attempts spent on this tower (fails + successes). */
+  attemptCount: (postId: string): string => `tower:${postId}:attempts`,
+  /** Global archive index: member = postId, score = finalizedAt. */
+  archiveIndex: (): string => `archive:index`,
   player: (postId: string, userId: string): string => `tower:${postId}:player:${userId}`,
+  // --- per-tower leaderboards (today) ---
   lbScore: (postId: string): string => `tower:${postId}:lb:score`,
+  lbPlacement: (postId: string): string => `tower:${postId}:lb:placement`,
+  // --- global / all-time leaderboards ---
+  lbAbsurd: (): string => `lb:absurd`,
+  lbStreak: (): string => `lb:streak`,
+  lbAllTime: (): string => `lb:alltime`,
+  /** Global userId -> username map, so leaderboards resolve names without ids. */
+  names: (): string => `user:names`,
+  /** Global per-user all-time bookkeeping (streak, totals, last active day). */
+  userAllTime: (userId: string): string => `user:${userId}:alltime`,
   attempt: (attemptId: string): string => `attempt:${attemptId}`,
   idem: (idempotencyKey: string): string => `idem:${idempotencyKey}`,
 } as const;

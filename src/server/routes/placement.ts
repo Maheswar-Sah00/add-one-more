@@ -11,6 +11,7 @@ import {
 } from '../../shared/api';
 import { asNumber, asString, isRecord } from '../core/json';
 import { k } from '../core/keys';
+import { finalizeIfDue } from '../core/lifecycle';
 import { loadPlayer } from '../core/player';
 import {
   commitPlacement,
@@ -90,6 +91,8 @@ placement.post('/commit', async (c) => {
         score: prior.score,
         tower: toClientTower(tower, userId),
         player,
+        // Idempotent replay: never re-celebrate a milestone already awarded.
+        milestone: null,
       });
     }
   }
@@ -103,14 +106,21 @@ placement.post('/commit', async (c) => {
     return c.json<ErrorResponse>(err('attempt-expired', 'Attempt expired — start again'), 410);
   }
 
+  // End-of-day rule (§16): a commit is only accepted while the tower is active
+  // and before its end time. Past that, finalize and refuse (non-punitive — the
+  // attempt is not consumed), keeping the final snapshot immutable.
+  await finalizeIfDue(postId, Date.now());
   const meta = await loadMeta(postId);
-  if (!meta || meta.status !== 'active') {
+  if (!meta || meta.status !== 'active' || Date.now() >= meta.endsAt) {
     return c.json<ErrorResponse>(err('no-tower', 'Tower is not accepting placements'), 409);
   }
 
   const player = await loadPlayer(postId, userId, username);
-  if (player.hasSucceeded) {
-    return c.json<ErrorResponse>(err('already-succeeded', 'You already contributed today'), 409);
+  if (player.placementsRemaining <= 0) {
+    return c.json<ErrorResponse>(
+      err('already-succeeded', 'You’ve already placed all of today’s objects'),
+      409
+    );
   }
   if (player.attemptsRemaining <= 0) {
     return c.json<ErrorResponse>(err('no-attempts', 'No attempts remaining'), 409);
@@ -185,6 +195,9 @@ placement.post('/commit', async (c) => {
     score: outcome.placement.score,
     tower: toClientTower(outcome.tower, userId),
     player: outcome.player,
+    milestone: outcome.milestone
+      ? { id: outcome.milestone.id, title: outcome.milestone.title }
+      : null,
   });
   } catch (error) {
     // Never claim success on a storage failure — the client goes read-only.

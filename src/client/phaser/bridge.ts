@@ -23,10 +23,17 @@ export type SceneCommands = {
   rotate(dir: -1 | 1): void;
   drop(): void;
   cancelActive(): void;
+  /**
+   * Practice only: accept the just-settled active body into the local tower so
+   * the next object stacks on it. Purely client-side — never writes to Redis.
+   */
+  commitLocal(): void;
   /** Identify the local player so the scene can mark their own bodies. */
   setLocalUser(userId: string | null): void;
   /** Highlight (or clear, with null) the inspected body. */
   highlightBody(bodyId: string | null): void;
+  /** Play a celebration particle burst at the tower top (milestone). */
+  celebrate(): void;
 };
 
 /**
@@ -94,11 +101,19 @@ export class GameBridge {
     this.scene?.cancelActive();
   }
 
+  commitLocal(): void {
+    this.scene?.commitLocal();
+  }
+
   setLocalUser(userId: string | null): void {
     this.scene?.setLocalUser(userId);
   }
 
   highlightBody(bodyId: string | null): void {
     this.scene?.highlightBody(bodyId);
+  }
+
+  celebrate(): void {
+    this.scene?.celebrate();
   }
 }

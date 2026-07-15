@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import type { ModifierPhysics } from '../../shared/modifiers';
 import type { GameObjectDef, RectPart } from '../../shared/objects';
 
 /**
@@ -7,20 +8,27 @@ import type { GameObjectDef, RectPart } from '../../shared/objects';
  * used for a freshly spawned object and for reconstructing one from a persisted
  * transform — passing the saved (x, y, angle) recreates it identically because
  * every shape is centred on its area centroid.
+ *
+ * `mods` applies the day's modifier (Task 16): density and friction are scaled
+ * consistently for every object so all players share the same physics.
  */
 export type ObjectInstance = {
   body: MatterJS.BodyType;
   view: Phaser.GameObjects.Container;
 };
 
+/** Identity modifier — no scaling (Normal Day / callers that don't pass one). */
+const IDENTITY_MODS: ModifierPhysics = { gravityScale: 1, densityScale: 1, frictionScale: 1 };
+
 function physConfig(
   def: GameObjectDef,
-  isStatic: boolean
+  isStatic: boolean,
+  mods: ModifierPhysics
 ): Phaser.Types.Physics.Matter.MatterBodyConfig {
   return {
-    density: def.density,
-    friction: def.friction,
-    frictionStatic: def.frictionStatic,
+    density: def.density * mods.densityScale,
+    friction: def.friction * mods.frictionScale,
+    frictionStatic: def.frictionStatic * mods.frictionScale,
     frictionAir: def.frictionAir,
     restitution: def.restitution,
     isStatic,
@@ -84,14 +92,30 @@ export function createObject(
   x: number,
   y: number,
   angle: number,
-  isStatic: boolean
+  isStatic: boolean,
+  mods: ModifierPhysics = IDENTITY_MODS
 ): ObjectInstance {
   const s = def.scale;
-  const cfg = physConfig(def, isStatic);
+  const cfg = physConfig(def, isStatic, mods);
   const container = scene.add.container(x, y);
   let body: MatterJS.BodyType;
 
   const shape = def.shape;
+
+  // Soft drop shadow behind the art so objects read on the light stage (added
+  // first → always behind). Approximated to the bounding box; good enough for a
+  // gentle 3D pop.
+  const shadow = scene.add.graphics();
+  shadow.fillStyle(0x3b3f77, 0.13);
+  if (shape.kind === 'circle') {
+    shadow.fillCircle(0, 6, shape.radius * s);
+  } else {
+    const sw = shape.width * s;
+    const sh = shape.height * s;
+    shadow.fillRoundedRect(-sw / 2, -sh / 2 + 6, sw, sh, 8);
+  }
+  container.add(shadow);
+
   switch (shape.kind) {
     case 'rect': {
       const w = shape.width * s;
@@ -131,9 +155,9 @@ export function createObject(
       // Matter's raw Bodies factory takes its own definition type (not Phaser's
       // MatterBodyConfig), so build a plain options literal for the parts.
       const partOpts = {
-        density: def.density,
-        friction: def.friction,
-        frictionStatic: def.frictionStatic,
+        density: def.density * mods.densityScale,
+        friction: def.friction * mods.frictionScale,
+        frictionStatic: def.frictionStatic * mods.frictionScale,
         frictionAir: def.frictionAir,
         restitution: def.restitution,
         isStatic,

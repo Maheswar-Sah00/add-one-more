@@ -1,8 +1,41 @@
 import type {
   ObjectChoice,
   PlayerDailyState,
+  TowerFinalSummary,
   TowerState,
 } from './types';
+
+/** A community milestone reached by a placement (Task 13). */
+export type MilestoneInfo = {
+  id: string;
+  title: string;
+};
+
+/** One leaderboard row — public username + value only, never an internal id. */
+export type LeaderboardEntry = {
+  rank: number;
+  username: string;
+  value: number;
+  isViewer: boolean;
+};
+
+export type LeaderboardBoard = {
+  id: string;
+  title: string;
+  entries: LeaderboardEntry[];
+};
+
+export type LeaderboardResponse = {
+  type: 'leaderboard';
+  boards: LeaderboardBoard[];
+  limit: number;
+};
+
+/** The community-monument archive: recent finalized daily summaries (§17). */
+export type ArchiveResponse = {
+  type: 'archive';
+  entries: TowerFinalSummary[];
+};
 
 /** A body transform as submitted by the client on commit (no ownership — the
  *  server derives ownership itself so it cannot be spoofed). */
@@ -24,6 +57,8 @@ export type BootstrapResponse = {
   userId: string | null;
   /** True when Redis is degraded: the tower is viewable but not writable. */
   readOnly: boolean;
+  /** Present once the daily tower has finalized (§16). */
+  summary: TowerFinalSummary | null;
   now: number;
 };
 
@@ -56,6 +91,8 @@ export type CommitResponse = {
   score: number;
   tower: TowerState;
   player: PlayerDailyState;
+  /** Present only when this placement crossed a milestone (celebrate once). */
+  milestone: MilestoneInfo | null;
 };
 
 export type FailRequest = {

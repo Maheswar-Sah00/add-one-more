@@ -153,6 +153,7 @@ vi.mock('@devvit/web/server', () => ({
   redis: mocks.redis,
   context: mocks.context,
   reddit: mocks.reddit,
+  scheduler: { runJob: async () => 'job', cancelJob: async () => {}, listJobs: async () => [] },
 }));
 
 import { randomUUID } from 'node:crypto';
@@ -230,7 +231,7 @@ async function playerOf(userId: string, username: string): Promise<Record<string
 
 describe('optimistic concurrency — two users, same base version', () => {
   it('rejects the stale commit, keeps the attempt + object, and lets the loser reposition', async () => {
-    await ensureTower('t3_tower', 1000); // version 1
+    await ensureTower('t3_tower', 1_700_000_000_000); // version 1
 
     // 1. Both players start attempts at version N=1.
     as('t2_alice', 'alice');
@@ -305,7 +306,7 @@ describe('optimistic concurrency — two users, same base version', () => {
   });
 
   it('WATCH/EXEC aborts a commit when the version changes inside the race window', async () => {
-    await ensureTower('t3_tower', 1000); // version 1
+    await ensureTower('t3_tower', 1_700_000_000_000); // version 1
 
     // A competing commit lands *after* this commit passes its pre-check read but
     // *before* its EXEC — the WATCH on the version key must abort the transaction.
@@ -337,7 +338,7 @@ describe('optimistic concurrency — two users, same base version', () => {
 
 describe('idempotency + non-consuming failures', () => {
   it('a duplicate commit (same key, e.g. a timeout retry) returns the original placement, not a second body', async () => {
-    await ensureTower('t3_tower', 1000);
+    await ensureTower('t3_tower', 1_700_000_000_000);
     as('t2_alice', 'alice');
     const s = await start();
     const key = randomUUID();
@@ -359,7 +360,7 @@ describe('idempotency + non-consuming failures', () => {
   });
 
   it('client tower payloads redact other users’ ids but keep the viewer’s own for the marker', async () => {
-    await ensureTower('t3_tower', 1000);
+    await ensureTower('t3_tower', 1_700_000_000_000);
     as('t2_alice', 'alice');
     const a = await start();
     await post('/api/placement/commit', commitBody(a, randomUUID())); // alice places body 1
@@ -389,7 +390,7 @@ describe('idempotency + non-consuming failures', () => {
   });
 
   it('a Redis failure during commit returns redis-error and consumes no attempt', async () => {
-    await ensureTower('t3_tower', 1000);
+    await ensureTower('t3_tower', 1_700_000_000_000);
     as('t2_alice', 'alice');
     const s = await start();
 

@@ -20,7 +20,7 @@ export function createGame(parent: HTMLElement, bridge: GameBridge): Phaser.Game
   return new Phaser.Game({
     type: Phaser.AUTO,
     parent,
-    backgroundColor: '#181a20',
+    backgroundColor: '#f6f7fc',
     scale: {
       mode: Phaser.Scale.RESIZE,
       autoCenter: Phaser.Scale.CENTER_BOTH,

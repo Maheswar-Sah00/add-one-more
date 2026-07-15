@@ -6,7 +6,7 @@ import { Hono } from 'hono';
  * end-to-end through Hono's `app.request`, with `@devvit/web/server` replaced by
  * an in-memory Redis, a mutable auth `context` (so we can simulate signed-out
  * users), and a `reddit` stub. This proves the server — not the client — owns
- * attempts remaining, object choices, and the one-success-per-day rule.
+ * attempts remaining, object choices, and the up-to-three-placements-per-day rule.
  */
 
 type ZMember = { member: string; score: number };
@@ -107,6 +107,7 @@ vi.mock('@devvit/web/server', () => ({
   redis: mocks.redis,
   context: mocks.context,
   reddit: mocks.reddit,
+  scheduler: { runJob: async () => 'job', cancelJob: async () => {}, listJobs: async () => [] },
 }));
 
 import { randomUUID } from 'node:crypto';
@@ -206,6 +207,24 @@ async function bootstrap(): Promise<Record<string, unknown>> {
 async function bootstrapPlayer(): Promise<Record<string, unknown>> {
   const b = await bootstrap();
   return isRecord(b.player) ? b.player : {};
+}
+
+/** Current accepted bodies as SubmittedBody[], for building a stacking commit. */
+async function bootstrapBodies(): Promise<
+  { bodyId: string; objectId: string; x: number; y: number; angle: number; scaleX: number; scaleY: number }[]
+> {
+  const b = await bootstrap();
+  const tower = isRecord(b.tower) ? b.tower : {};
+  const bodies = Array.isArray(tower.bodies) ? tower.bodies : [];
+  return bodies.filter(isRecord).map((body) => ({
+    bodyId: asString(body.bodyId),
+    objectId: asString(body.objectId),
+    x: asNumber(body.x, 0),
+    y: asNumber(body.y, 0),
+    angle: asNumber(body.angle, 0),
+    scaleX: asNumber(body.scaleX, 1),
+    scaleY: asNumber(body.scaleY, 1),
+  }));
 }
 
 describe('official attempts — lifecycle', () => {
@@ -339,10 +358,45 @@ describe('official attempts — lifecycle', () => {
     expect(isRecord(boot.tower)).toBe(true);
   });
 
-  it('attempting a second success is refused after the player already contributed', async () => {
-    const s = await start();
-    expect((await commit(s, randomUUID())).status).toBe(200);
+  it('a player may place up to three objects — each scored — before further attempts are refused', async () => {
+    let cumulative = 0;
+    for (let i = 0; i < 3; i++) {
+      const s = await start();
+      // A stacking commit must resubmit the full settled snapshot (every prior
+      // body at its persisted transform) plus exactly one new body.
+      const prior = await bootstrapBodies();
+      const newBodyId = randomUUID();
+      const res = await post('/api/placement/commit', {
+        attemptId: s.attemptId,
+        idempotencyKey: randomUUID(),
+        selectedObjectId: s.objectId,
+        baseTowerVersion: s.baseTowerVersion,
+        newBodyId,
+        bodies: [
+          ...prior,
+          { bodyId: newBodyId, objectId: s.objectId, x: 240, y: 1560, angle: 0, scaleX: 1, scaleY: 1 },
+        ],
+      });
+      expect(res.status).toBe(200);
+      const score = asNumber((await rec(res)).score, 0);
+      expect(score).toBeGreaterThan(0); // each perfect balance is scored
+      cumulative += score;
+    }
 
+    const player = await bootstrapPlayer();
+    expect(asNumber(player.successfulPlacements, -1)).toBe(3);
+    expect(asNumber(player.placementsRemaining, -1)).toBe(0);
+    expect(asNumber(player.attemptsUsed, -1)).toBe(3);
+    // Daily score is the sum of every perfect-balance placement.
+    expect(asNumber(player.score, -1)).toBe(cumulative);
+
+    const boot = await bootstrap();
+    const tower = isRecord(boot.tower) ? boot.tower : {};
+    const meta = isRecord(tower.meta) ? tower.meta : {};
+    expect(asNumber(meta.successfulPlacements, -1)).toBe(3); // three objects in the tower
+    expect(asNumber(meta.uniqueContributors, -1)).toBe(1); // but still one builder
+
+    // A fourth object is refused once all placement slots are spent.
     const again = await post('/api/attempt/start');
     expect(again.status).toBe(409);
     expect(asString((await rec(again)).code)).toBe('already-succeeded');

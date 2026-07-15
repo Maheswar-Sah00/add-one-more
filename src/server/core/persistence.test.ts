@@ -108,7 +108,10 @@ const mocks = vi.hoisted(() => {
   return { redis: new MockRedis() };
 });
 
-vi.mock('@devvit/web/server', () => ({ redis: mocks.redis }));
+vi.mock('@devvit/web/server', () => ({
+  redis: mocks.redis,
+  scheduler: { runJob: async () => 'job', cancelJob: async () => {}, listJobs: async () => [] },
+}));
 
 import type { SubmittedBody } from '../../shared/api';
 import type { PersistedBodyState } from '../../shared/types';

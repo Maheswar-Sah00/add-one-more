@@ -19,6 +19,7 @@ export function layoutMode(widthPx: number): LayoutMode {
 }
 
 export const MAX_ATTEMPTS = RULES.maxAttemptsPerDay;
+export const MAX_PLACEMENTS = RULES.maxSuccessesPerDay;
 
 /**
  * The one primary state the launch screen is in. Exactly one applies; the order
@@ -56,7 +57,9 @@ export function deriveLaunchState(input: LaunchInput): LaunchState {
   if (input.readOnly) return 'read-only';
   if (input.towerStatus === 'finalized' || input.towerStatus === 'completed') return 'finalized';
   if (!input.authenticated) return 'unauthenticated';
-  if (input.player?.hasSucceeded) return 'contributed';
+  // "Contributed" now means the player has used up all their placement slots
+  // (placed maxSuccessesPerDay objects) — a single success no longer locks them out.
+  if (input.player && input.player.placementsRemaining <= 0) return 'contributed';
   if ((input.player?.attemptsRemaining ?? 0) <= 0) return 'no-attempts';
   return 'ready';
 }
@@ -103,12 +106,17 @@ export function contributionStatus(
 ): string {
   switch (state) {
     case 'contributed':
-      return 'Your object is in today’s tower.';
+      return `All ${MAX_PLACEMENTS} of your objects are in today’s tower.`;
     case 'no-attempts':
       return 'No attempts left today — come back tomorrow.';
     case 'ready': {
-      const left = player?.attemptsRemaining ?? MAX_ATTEMPTS;
-      return `${left} of ${MAX_ATTEMPTS} attempts left today`;
+      const attemptsLeft = player?.attemptsRemaining ?? MAX_ATTEMPTS;
+      const placed = player?.successfulPlacements ?? 0;
+      if (placed > 0) {
+        const slots = player?.placementsRemaining ?? MAX_PLACEMENTS;
+        return `${placed} placed · ${slots} more object${slots === 1 ? '' : 's'} you can add · ${attemptsLeft} attempt${attemptsLeft === 1 ? '' : 's'} left`;
+      }
+      return `${attemptsLeft} of ${MAX_ATTEMPTS} attempts left today`;
     }
     case 'unauthenticated':
       return 'Sign in on Reddit to add your object.';

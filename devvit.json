@@ -47,6 +47,11 @@
   "triggers": {
     "onAppInstall": "/internal/triggers/on-app-install"
   },
+  "scheduler": {
+    "tasks": {
+      "daily-finalize": "/internal/scheduler/finalize"
+    }
+  },
   "scripts": {
     "dev": "vite build --watch",
     "build": "vite build"

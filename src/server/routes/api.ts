@@ -1,11 +1,20 @@
 import { Hono } from 'hono';
 import { context, reddit } from '@devvit/web/server';
 import type {
+  ArchiveResponse,
   BootstrapResponse,
   ErrorResponse,
+  LeaderboardResponse,
 } from '../../shared/api';
-import { RULES } from '../../shared/config';
+import { ARCHIVE, RULES } from '../../shared/config';
 import type { PlayerDailyState, TowerState } from '../../shared/types';
+import {
+  LEADERBOARD_IDS,
+  LEADERBOARD_TITLES,
+  clampLimit,
+  readAllBoards,
+} from '../core/leaderboards';
+import { finalizeIfDue, loadArchive, loadSummary } from '../core/lifecycle';
 import { loadPlayer } from '../core/player';
 import { ensureTower, loadTowerState, toClientTower } from '../core/tower';
 
@@ -21,6 +30,8 @@ function anonymousPlayer(userId: string, username: string): PlayerDailyState {
     username,
     attemptsUsed: 0,
     attemptsRemaining: RULES.maxAttemptsPerDay,
+    successfulPlacements: 0,
+    placementsRemaining: RULES.maxSuccessesPerDay,
     hasSucceeded: false,
     successfulPlacementId: null,
     score: 0,
@@ -41,6 +52,8 @@ api.get('/bootstrap', async (c) => {
   // be read, drop to read-only rather than blocking viewing.
   try {
     await ensureTower(postId, now);
+    // Lazy finalization fallback (§16): if the day has ended, finalize on read.
+    await finalizeIfDue(postId, now);
     tower = await loadTowerState(postId);
   } catch (error) {
     console.error('bootstrap: redis write degraded, trying read-only', error);
@@ -69,6 +82,8 @@ api.get('/bootstrap', async (c) => {
     player = anonymousPlayer(userId ?? '', username);
   }
 
+  const summary = tower.meta.status === 'finalized' ? await loadSummary(postId).catch(() => null) : null;
+
   return c.json<BootstrapResponse>({
     type: 'bootstrap',
     tower: toClientTower(tower, userId ?? null),
@@ -76,6 +91,7 @@ api.get('/bootstrap', async (c) => {
     username,
     userId: userId ?? null,
     readOnly,
+    summary,
     now,
   });
 });
@@ -90,4 +106,41 @@ api.get('/tower', async (c) => {
     return c.json<ErrorResponse>(err('no-tower', 'no active tower'), 404);
   }
   return c.json<TowerState>(toClientTower(tower, userId ?? null));
+});
+
+api.get('/leaderboard', async (c) => {
+  const { postId, userId } = context;
+  if (!postId) {
+    return c.json<ErrorResponse>(err('no-post', 'postId missing from context'), 400);
+  }
+  const limit = clampLimit(Number(c.req.query('limit')));
+  try {
+    const boards = await readAllBoards(postId, userId ?? null, limit);
+    return c.json<LeaderboardResponse>({
+      type: 'leaderboard',
+      limit,
+      boards: LEADERBOARD_IDS.map((id) => ({
+        id,
+        title: LEADERBOARD_TITLES[id],
+        entries: boards[id],
+      })),
+    });
+  } catch (error) {
+    console.error('leaderboard: redis read failed', error);
+    return c.json<ErrorResponse>(err('redis-error', 'Leaderboards are unavailable'), 503);
+  }
+});
+
+api.get('/archive', async (c) => {
+  const requested = Number(c.req.query('limit'));
+  const limit = Number.isFinite(requested)
+    ? Math.max(1, Math.min(Math.trunc(requested), ARCHIVE.maxEntries))
+    : ARCHIVE.defaultLimit;
+  try {
+    const entries = await loadArchive(limit);
+    return c.json<ArchiveResponse>({ type: 'archive', entries });
+  } catch (error) {
+    console.error('archive: redis read failed', error);
+    return c.json<ErrorResponse>(err('redis-error', 'The archive is unavailable'), 503);
+  }
 });

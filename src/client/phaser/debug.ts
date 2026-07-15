@@ -5,7 +5,7 @@
  *
  * TASK 2: set SHOW_DEBUG to false before submission.
  */
-export const SHOW_DEBUG = true;
+export const SHOW_DEBUG = false;
 
 export class DebugModel {
   fps = 0;

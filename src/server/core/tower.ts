@@ -10,10 +10,14 @@ import type {
   TowerState,
   TowerStatus,
 } from '../../shared/types';
+import { milestoneIdsUpTo, newlyReached, type Milestone } from '../../shared/milestones';
+import { pickDailyModifier } from '../../shared/modifiers';
 import { asNumber, asString, asStringArray, isRecord, numStr, safeParse } from './json';
 import { k } from './keys';
+import { advanceAllTime, loadAllTime, serializeAllTime } from './leaderboards';
 import { loadPlayer, serializePlayer } from './player';
-import { computeScore, towerHeight } from './scoring';
+import { scheduleDailyFinalize } from './scheduling';
+import { computeScoreBreakdown, towerHeight } from './scoring';
 
 function toDayKey(ts: number): string {
   return new Date(ts).toISOString().slice(0, 10);
@@ -22,6 +26,8 @@ function toDayKey(ts: number): string {
 function toStatus(value: string | undefined): TowerStatus {
   return value === 'completed' || value === 'finalized' ? value : 'active';
 }
+
+export { toStatus };
 
 function serializeMeta(m: TowerMeta): Record<string, string> {
   return {
@@ -35,6 +41,7 @@ function serializeMeta(m: TowerMeta): Record<string, string> {
     themeId: m.themeId,
     createdAt: String(m.createdAt),
     endsAt: String(m.endsAt),
+    finalizedAt: String(m.finalizedAt),
     height: String(m.height),
     successfulPlacements: String(m.successfulPlacements),
     uniqueContributors: String(m.uniqueContributors),
@@ -57,6 +64,7 @@ function deserializeMeta(h: Record<string, string>): TowerMeta | null {
     themeId: h.themeId ?? 'warehouse',
     createdAt: numStr(h.createdAt, 0),
     endsAt: numStr(h.endsAt, 0),
+    finalizedAt: numStr(h.finalizedAt, 0),
     height: numStr(h.height, 0),
     successfulPlacements: numStr(h.successfulPlacements, 0),
     uniqueContributors: numStr(h.uniqueContributors, 0),
@@ -73,10 +81,13 @@ function buildInitialMeta(postId: string, now: number): TowerMeta {
     version: 1,
     status: 'active',
     seed: `${dayKey}:${postId}`,
-    modifierId: 'normal',
+    // Chosen server-side, deterministically from the day key: identical for every
+    // player, stable all day, never per-request random.
+    modifierId: pickDailyModifier(dayKey).id,
     themeId: 'warehouse',
     createdAt: now,
     endsAt: now + RULES.towerDurationMs,
+    finalizedAt: 0,
     height: 0,
     successfulPlacements: 0,
     uniqueContributors: 0,
@@ -153,6 +164,9 @@ export async function ensureTower(postId: string, now: number): Promise<TowerMet
     await redis.set(k.version(postId), String(meta.version));
     await redis.set(k.snapshot(postId), '[]');
     await redis.set(k.placements(postId), '[]');
+    // Best-effort: schedule finalization at the day's end. Lazy finalization is
+    // the authoritative fallback, so a failure here is non-fatal.
+    await scheduleDailyFinalize(postId, meta.endsAt);
     return meta;
   }
   // Another request won the claim; read theirs (falling back to our identical
@@ -194,6 +208,8 @@ export type CommitOutcome =
       tower: TowerState;
       player: PlayerDailyState;
       placement: TowerPlacement;
+      /** The milestone this placement crossed, if any (celebrate + save once). */
+      milestone: Milestone | null;
     }
   | { kind: 'conflict' };
 
@@ -219,10 +235,11 @@ export async function commitPlacement(input: {
   const meta = await loadMeta(postId);
   if (!meta) return { kind: 'conflict' };
 
-  const [existing, placements, player] = await Promise.all([
+  const [existing, placements, player, prevAllTime] = await Promise.all([
     loadSnapshot(postId),
     loadPlacements(postId),
     loadPlayer(postId, userId, username),
+    loadAllTime(userId),
   ]);
 
   const submittedById = new Map(input.submitted.map((b) => [b.bodyId, b]));
@@ -253,7 +270,18 @@ export async function commitPlacement(input: {
   };
   newBodies.push(newBody);
 
-  const score = computeScore(selectedObjectId, newBody.y);
+  // Community milestones + authoritative score. The count moving prevCount ->
+  // newCount decides which milestone (if any) this placement crosses; the
+  // milestone bonus and modifier bonus fold into the server-computed score.
+  const prevCount = meta.successfulPlacements;
+  const newCount = prevCount + 1;
+  const milestone = newlyReached(prevCount, newCount)[0] ?? null;
+  const breakdown = computeScoreBreakdown(selectedObjectId, newBody.y, {
+    modifierId: meta.modifierId,
+    milestoneReached: milestone !== null,
+  });
+  const score = breakdown.total;
+  const allTime = advanceAllTime(prevAllTime, meta.dayKey, difficulty === 'absurd');
   const placement: TowerPlacement = {
     placementId: input.placementId,
     bodyId: newBodyId,
@@ -267,18 +295,27 @@ export async function commitPlacement(input: {
   };
   const newPlacements = [...placements, placement];
   const newVersion = baseTowerVersion + 1;
+  // A player may place up to maxSuccessesPerDay objects; only their FIRST
+  // successful placement adds them as a unique contributor.
+  const isFirstSuccessForPlayer = player.successfulPlacements === 0;
+  const newPlayerSuccesses = player.successfulPlacements + 1;
   const newMeta: TowerMeta = {
     ...meta,
     version: newVersion,
     height: towerHeight(newBodies),
-    // One success per player per day => every commit is a fresh contributor.
-    successfulPlacements: meta.successfulPlacements + 1,
-    uniqueContributors: meta.uniqueContributors + 1,
+    // Tower object count grows with every commit (used for community milestones).
+    successfulPlacements: newCount,
+    uniqueContributors: meta.uniqueContributors + (isFirstSuccessForPlayer ? 1 : 0),
+    // Authoritative unlocked set derived from the count: monotonic, so this is
+    // idempotent — a refresh reads it back and crosses nothing new.
+    milestonesUnlocked: milestoneIdsUpTo(newCount),
   };
   const updatedPlayer: PlayerDailyState = {
     ...player,
     attemptsUsed: player.attemptsUsed + 1,
     attemptsRemaining: Math.max(0, RULES.maxAttemptsPerDay - (player.attemptsUsed + 1)),
+    successfulPlacements: newPlayerSuccesses,
+    placementsRemaining: Math.max(0, RULES.maxSuccessesPerDay - newPlayerSuccesses),
     hasSucceeded: true,
     successfulPlacementId: input.placementId,
     score: player.score + score,
@@ -298,7 +335,20 @@ export async function commitPlacement(input: {
   await tx.hSet(k.meta(postId), serializeMeta(newMeta));
   await tx.hSet(k.player(postId, userId), serializePlayer(updatedPlayer));
   await tx.set(k.idem(input.idempotencyKey), input.placementId);
+  // A successful placement spends one official attempt (§17 total-attempts stat).
+  await tx.incrBy(k.attemptCount(postId), 1);
+  // Leaderboards (§13). Per-tower: cumulative score + best single placement.
   await tx.zAdd(k.lbScore(postId), { member: userId, score: updatedPlayer.score });
+  await tx.zAdd(k.lbPlacement(postId), { member: userId, score });
+  // Global name map (so leaderboards resolve usernames without exposing ids).
+  await tx.hSet(k.names(), { [userId]: username });
+  // Global all-time bookkeeping: streak, total placements, absurd count.
+  await tx.hSet(k.userAllTime(userId), serializeAllTime(allTime));
+  await tx.zAdd(k.lbStreak(), { member: userId, score: allTime.streak });
+  await tx.zAdd(k.lbAllTime(), { member: userId, score: allTime.totalPlacements });
+  if (allTime.absurdCount > 0) {
+    await tx.zAdd(k.lbAbsurd(), { member: userId, score: allTime.absurdCount });
+  }
   const results = await tx.exec();
   if (!results || results.length === 0) {
     return { kind: 'conflict' };
@@ -311,5 +361,6 @@ export async function commitPlacement(input: {
     tower: { meta: newMeta, bodies: newBodies, placements: newPlacements },
     player: updatedPlayer,
     placement,
+    milestone,
   };
 }

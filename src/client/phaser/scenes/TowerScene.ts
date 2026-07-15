@@ -1,10 +1,12 @@
 import Phaser from 'phaser';
 import { WORLD } from '../../../shared/config';
+import { modifierPhysics, type ModifierPhysics } from '../../../shared/modifiers';
 import { getObjectDef, type GameObjectDef } from '../../../shared/objects';
 import type { SubmittedBody } from '../../../shared/api';
 import type { PersistedBodyState, TowerState } from '../../../shared/types';
 import type { GameBridge, ScenePhase } from '../bridge';
-import { playImpact } from '../audio';
+import { playCollapse, playImpact, playSuccess, type Material } from '../audio';
+import { prefersReducedMotion } from '../../state/settings';
 import { DebugModel, SHOW_DEBUG } from '../debug';
 import { createObject } from '../bodyFactory';
 import {
@@ -48,6 +50,8 @@ export class TowerScene extends Phaser.Scene {
   private phase: ScenePhase = 'idle';
   private selectedObjectId = '';
   private baseTowerVersion = 0;
+  /** The day's modifier physics, derived from the tower meta (Task 16). */
+  private mods: ModifierPhysics = { gravityScale: 1, densityScale: 1, frictionScale: 1 };
 
   private stability: StabilityState = createStabilityState();
   private debugGfx: Phaser.GameObjects.Graphics | null = null;
@@ -60,7 +64,18 @@ export class TowerScene extends Phaser.Scene {
 
   /** Local pre-attempt snapshot captured before each drop, for restore. */
   private preAttemptSnapshot: PersistedBodyState[] = [];
-  private reducedMotion = false;
+
+  // --- feel/polish (Task 18) ---
+  /** Escalating "tension" ring drawn on the active body while it settles. */
+  private tensionGfx: Phaser.GameObjects.Graphics | null = null;
+  /** Throttle collision SFX/particles so a busy collapse can't spam them. */
+  private lastImpactAt = 0;
+  /** Smoothed camera zoom target (controlled zoom-out as the tower grows). */
+  private zoomLevel = 1;
+
+  private isReducedMotion(): boolean {
+    return prefersReducedMotion();
+  }
 
   constructor(bridge: GameBridge, debug: DebugModel) {
     super('tower');
@@ -114,14 +129,18 @@ export class TowerScene extends Phaser.Scene {
       keyboard.on('keydown-SPACE', () => this.drop());
     }
 
-    // First meaningful collision starts the stability evaluation window (§12.1).
+    // First meaningful collision starts the stability evaluation window (§12.1)
+    // and drives material-based impact feedback (audio + dust/sparks).
     this.matter.world.on(
       'collisionstart',
       (event: Phaser.Physics.Matter.Events.CollisionStartEvent) => {
-        if (this.phase !== 'settling' || !this.active || this.stability.startedAt !== null) return;
+        if (this.phase !== 'settling' || !this.active) return;
         for (const pair of event.pairs) {
           if (this.involvesActive(pair)) {
-            this.stability = beginEvaluation(this.stability, this.time.now);
+            if (this.stability.startedAt === null) {
+              this.stability = beginEvaluation(this.stability, this.time.now);
+            }
+            this.onActiveImpact();
             break;
           }
         }
@@ -132,17 +151,21 @@ export class TowerScene extends Phaser.Scene {
       this.debugGfx = this.add.graphics().setDepth(900);
     }
 
-    // Small round texture for collapse particles.
+    // Small round texture for collapse/spark particles.
     const spark = this.make.graphics({ x: 0, y: 0 });
     spark.fillStyle(0xffffff, 1);
     spark.fillCircle(4, 4, 4);
     spark.generateTexture('spark', 8, 8);
     spark.destroy();
 
-    this.reducedMotion =
-      typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-        ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        : false;
+    // Soft, low-contrast puff for dust (deliberately faint — never hides the tower).
+    const dust = this.make.graphics({ x: 0, y: 0 });
+    dust.fillStyle(0xffffff, 0.5);
+    dust.fillCircle(8, 8, 8);
+    dust.generateTexture('dust', 16, 16);
+    dust.destroy();
+
+    this.tensionGfx = this.add.graphics().setDepth(700);
 
     // Slow motion must ALWAYS return to normal, even on teardown.
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.resetTimeScale());
@@ -171,29 +194,61 @@ export class TowerScene extends Phaser.Scene {
   private drawBackdrop(): void {
     const g = this.add.graphics();
     g.setDepth(-10);
-    // Warm spotlight pool on the platform.
-    g.fillStyle(0x2a2d38, 1);
-    g.fillCircle(WORLD.centerX, WORLD.platformTopY - 120, 520);
-    g.fillStyle(0x20222b, 1);
-    g.fillCircle(WORLD.centerX, WORLD.platformTopY - 120, 360);
+    const cx = WORLD.centerX;
+    const cy = WORLD.platformTopY - 250;
+    // Soft concentric "stage" pool behind the tower (light lavender).
+    g.fillStyle(0xeceefb, 1);
+    g.fillCircle(cx, cy, 470);
+    g.fillStyle(0xe4e8fb, 1);
+    g.fillCircle(cx, cy, 350);
+
+    // Friendly clouds flanking the stage.
+    this.drawCloud(cx - 300, cy + 120, 1.1);
+    this.drawCloud(cx + 300, cy + 170, 0.95);
+    this.drawCloud(cx - 250, cy - 190, 0.7);
+
+    // A couple of sparkles for life (static, never flashing).
+    this.drawSparkle(cx - 170, cy - 120, 13);
+    this.drawSparkle(cx + 190, cy - 70, 10);
+    this.drawSparkle(cx + 120, cy - 210, 7);
   }
 
-  /** Faint boundary framing the empty play space above the platform. */
+  /** A soft, rounded pastel cloud built from overlapping circles. */
+  private drawCloud(x: number, y: number, scale: number): void {
+    const g = this.add.graphics();
+    g.setDepth(-9);
+    g.fillStyle(0xdfe4f8, 1);
+    const r = 34 * scale;
+    g.fillCircle(x, y, r);
+    g.fillCircle(x - r * 0.9, y + r * 0.25, r * 0.75);
+    g.fillCircle(x + r * 0.95, y + r * 0.2, r * 0.8);
+    g.fillRoundedRect(x - r * 1.4, y + r * 0.2, r * 2.8, r * 0.9, r * 0.45);
+  }
+
+  /** A soft four-point sparkle. */
+  private drawSparkle(x: number, y: number, size: number): void {
+    const g = this.add.graphics();
+    g.setDepth(-8);
+    g.fillStyle(0xc7cff6, 1);
+    g.beginPath();
+    g.moveTo(x, y - size);
+    g.lineTo(x + size * 0.28, y - size * 0.28);
+    g.lineTo(x + size, y);
+    g.lineTo(x + size * 0.28, y + size * 0.28);
+    g.lineTo(x, y + size);
+    g.lineTo(x - size * 0.28, y + size * 0.28);
+    g.lineTo(x - size, y);
+    g.lineTo(x - size * 0.28, y - size * 0.28);
+    g.closePath();
+    g.fillPath();
+  }
+
+  /** Repurposed: a soft ground shadow beneath the platform (light theme). */
   private drawTowerArea(): void {
     const g = this.add.graphics();
     g.setDepth(-6);
-    g.lineStyle(2, 0x3a3f4d, 0.5);
-    g.lineBetween(WORLD.minX, WORLD.ceilingY, WORLD.minX, WORLD.platformTopY);
-    g.lineBetween(WORLD.maxX, WORLD.ceilingY, WORLD.maxX, WORLD.platformTopY);
-    g.lineStyle(1, 0x3a3f4d, 0.35);
-    g.lineBetween(WORLD.minX, WORLD.ceilingY, WORLD.maxX, WORLD.ceilingY);
-    this.add
-      .text(WORLD.centerX, WORLD.ceilingY - 24, 'tower area', {
-        color: '#4b5162',
-        fontSize: '16px',
-      })
-      .setOrigin(0.5, 0)
-      .setDepth(-6);
+    g.fillStyle(0x9aa3d6, 0.18);
+    g.fillEllipse(WORLD.centerX, WORLD.platformTopY + WORLD.platformHeight + 18, WORLD.platformWidth + 70, 40);
   }
 
   private buildPlatform(): void {
@@ -205,33 +260,32 @@ export class TowerScene extends Phaser.Scene {
       WORLD.platformHeight,
       { isStatic: true, friction: 1, frictionStatic: 1 }
     );
+    const left = WORLD.centerX - WORLD.platformWidth / 2;
     const g = this.add.graphics();
     g.setDepth(-5);
-    g.fillStyle(0x3b3f4d, 1);
-    g.lineStyle(4, 0x555b6e, 1);
-    g.fillRoundedRect(
-      WORLD.centerX - WORLD.platformWidth / 2,
-      WORLD.platformTopY,
-      WORLD.platformWidth,
-      WORLD.platformHeight,
-      6
-    );
-    g.strokeRoundedRect(
-      WORLD.centerX - WORLD.platformWidth / 2,
-      WORLD.platformTopY,
-      WORLD.platformWidth,
-      WORLD.platformHeight,
-      6
-    );
+    // Soft drop shadow.
+    g.fillStyle(0x8b93c7, 0.16);
+    g.fillRoundedRect(left + 4, WORLD.platformTopY + 8, WORLD.platformWidth, WORLD.platformHeight, 14);
+    // A pale indigo "side" for a subtle 3D slab feel.
+    g.fillStyle(0xd9def6, 1);
+    g.fillRoundedRect(left, WORLD.platformTopY + 10, WORLD.platformWidth, WORLD.platformHeight, 14);
+    // White top face.
+    g.fillStyle(0xffffff, 1);
+    g.lineStyle(2, 0xe6e9f8, 1);
+    g.fillRoundedRect(left, WORLD.platformTopY, WORLD.platformWidth, WORLD.platformHeight - 6, 14);
+    g.strokeRoundedRect(left, WORLD.platformTopY, WORLD.platformWidth, WORLD.platformHeight - 6, 14);
   }
+
+  private baseZoom = 1;
 
   private applyZoom(): void {
     const w = this.scale.width;
     const h = this.scale.height;
     if (w === 0 || h === 0) return;
-    // Fit the world width, but never so zoomed-in that we lose vertical context.
-    const zoom = Math.min(w / WORLD.width, h / 900);
-    this.cameras.main.setZoom(zoom);
+    // Fit the world width, but keep enough vertical context that the platform +
+    // roughly the top three objects and the incoming object stay in frame.
+    this.baseZoom = Math.min(w / WORLD.width, h / 1000);
+    this.cameras.main.setZoom(this.baseZoom * this.zoomLevel);
   }
 
   // ---- tower reconstruction ----------------------------------------------
@@ -271,7 +325,7 @@ export class TowerScene extends Phaser.Scene {
       const def = getObjectDef(state.objectId);
       if (!def) continue;
       try {
-        const inst = createObject(this, def, state.x, state.y, state.angle, false);
+        const inst = createObject(this, def, state.x, state.y, state.angle, false, this.mods);
         this.addOwnershipMarker(inst.view, def, state);
         this.accepted.push({ bodyId: state.bodyId, def, body: inst.body, view: inst.view, state });
       } catch (e) {
@@ -282,6 +336,9 @@ export class TowerScene extends Phaser.Scene {
 
   private rebuild(tower: TowerState): void {
     this.baseTowerVersion = tower.meta.version;
+    // Apply the day's modifier: gravity now, density/friction per body on build.
+    this.mods = modifierPhysics(tower.meta.modifierId);
+    this.matter.world.setGravity(0, WORLD.gravityY * this.mods.gravityScale);
     this.buildAccepted(tower.bodies);
     this.setPhase('idle');
   }
@@ -347,7 +404,7 @@ export class TowerScene extends Phaser.Scene {
       WORLD.ceilingY + def.shape.height,
       this.currentTopY() - WORLD.spawnGap - def.spawnOffsetY
     );
-    const inst = createObject(this, def, WORLD.centerX, spawnY, 0, true);
+    const inst = createObject(this, def, WORLD.centerX, spawnY, 0, true, this.mods);
     // The active object isn't persisted yet; its state is a placeholder and is
     // never written into the pre-attempt snapshot (only accepted bodies are).
     const state: PersistedBodyState = {
@@ -370,6 +427,16 @@ export class TowerScene extends Phaser.Scene {
   rotate(dir: -1 | 1): void {
     if (this.phase !== 'placing' || !this.active) return;
     this.matter.body.setAngle(this.active.body, this.active.body.angle + dir * ROTATE_STEP);
+    this.rotationFeedback();
+  }
+
+  /** A quick scale pulse on the active object so a rotate visibly registers. */
+  private rotationFeedback(): void {
+    if (!this.active || this.isReducedMotion()) return;
+    const view = this.active.view;
+    this.tweens.killTweensOf(view);
+    view.setScale(1);
+    this.tweens.add({ targets: view, scale: 1.08, duration: 70, yoyo: true, ease: 'Quad.easeOut' });
   }
 
   cancelActive(): void {
@@ -380,15 +447,53 @@ export class TowerScene extends Phaser.Scene {
     this.setPhase('idle');
   }
 
+  /**
+   * Practice only: promote the settled active body into the accepted tower using
+   * its current transform, so the next practice object stacks on it. No server
+   * write happens — this only mutates local scene state.
+   */
+  commitLocal(): void {
+    if (!this.active) return;
+    const entry = this.active;
+    entry.state = {
+      ...entry.state,
+      x: entry.body.position.x,
+      y: entry.body.position.y,
+      angle: entry.body.angle,
+      sequenceNumber: this.accepted.length + 1,
+    };
+    this.accepted.push(entry);
+    this.active = null;
+    this.setPhase('idle');
+  }
+
   drop(): void {
     if (this.phase !== 'placing' || !this.active) return;
     // Capture the pre-attempt snapshot (positions + ownership) for restore.
     this.preAttemptSnapshot = this.accepted.map((e) => ({ ...e.state }));
     this.resetTimeScale();
+    this.dropFeedback(this.active.body.position.x, this.active.body.position.y);
     this.matter.body.setStatic(this.active.body, false);
     this.stability = createStabilityState();
+    this.lastImpactAt = 0;
     this.setPhase('settling');
     this.bridge.emitStabilityLabel('hold');
+  }
+
+  /** A brief expanding ring at the drop point — a clear "released" cue. */
+  private dropFeedback(x: number, y: number): void {
+    if (this.isReducedMotion()) return;
+    const ring = this.add.graphics().setDepth(650);
+    ring.lineStyle(2, 0xf59e0b, 0.8);
+    ring.strokeCircle(x, y, 6);
+    this.tweens.add({
+      targets: ring,
+      scale: 2.4,
+      alpha: 0,
+      duration: 280,
+      ease: 'Quad.easeOut',
+      onComplete: () => ring.destroy(),
+    });
   }
 
   // ---- per-frame ----------------------------------------------------------
@@ -397,6 +502,7 @@ export class TowerScene extends Phaser.Scene {
     this.syncViews();
     this.updateCamera();
     this.drawHighlight();
+    this.drawTension();
 
     if (this.phase === 'settling') {
       this.evaluate();
@@ -518,7 +624,10 @@ export class TowerScene extends Phaser.Scene {
   private finishSuccess(): void {
     if (!this.active) return;
     this.setPhase('done');
-    if (!this.reducedMotion) this.cameras.main.flash(200, 90, 200, 150);
+    const b = this.active.body;
+    playSuccess();
+    // Localized success particles (a soft rise), never a full-screen flash.
+    if (!this.isReducedMotion()) this.spawnSuccessParticles(b.position.x, b.position.y);
     this.bridge.emitSettle({
       stable: true,
       newBodyId: this.active.bodyId,
@@ -527,6 +636,79 @@ export class TowerScene extends Phaser.Scene {
       bodies: this.snapshotBodies(),
       message: null,
     });
+  }
+
+  // ---- particle helpers (all count-limited; faint enough to never hide the tower) ----
+
+  /** Material impact from a collision: audio + dust (heavy) or sparks (metal/glass). */
+  private onActiveImpact(): void {
+    if (!this.active) return;
+    const now = this.time.now;
+    if (now - this.lastImpactAt < 90) return; // throttle → limits sound + particles
+    const b = this.active.body;
+    const speed = Math.hypot(b.velocity.x, b.velocity.y);
+    if (speed < 3) return; // ignore gentle settling contacts
+    this.lastImpactAt = now;
+
+    const material: Material = this.active.def.material;
+    playImpact(speed, material);
+    if (this.isReducedMotion()) return;
+    if (material === 'metal' || material === 'glass') {
+      this.spawnSparks(b.position.x, b.position.y, speed);
+    } else if (speed > 6) {
+      this.spawnDust(b.position.x, b.position.y, speed);
+    }
+  }
+
+  private spawnSparks(x: number, y: number, speed: number): void {
+    if (!this.textures.exists('spark')) return;
+    const emitter = this.add.particles(x, y, 'spark', {
+      speed: { min: 40, max: 70 + speed * 4 },
+      lifespan: 300,
+      scale: { start: 0.5, end: 0 },
+      gravityY: 300,
+      tint: [0xfff3c4, 0xffd479],
+      emitting: false,
+    });
+    emitter.explode(Math.min(8, 3 + Math.round(speed / 3)), x, y);
+    this.time.delayedCall(500, () => emitter.destroy());
+  }
+
+  private spawnDust(x: number, y: number, speed: number): void {
+    if (!this.textures.exists('dust')) return;
+    const emitter = this.add.particles(x, y, 'dust', {
+      speed: { min: 10, max: 26 + speed * 2 },
+      lifespan: 520,
+      scale: { start: 0.7, end: 0 },
+      alpha: { start: 0.35, end: 0 },
+      gravityY: -8,
+      tint: [0x9aa0ad, 0x767c8a],
+      emitting: false,
+    });
+    emitter.explode(Math.min(6, 2 + Math.round(speed / 5)), x, y);
+    this.time.delayedCall(700, () => emitter.destroy());
+  }
+
+  private spawnSuccessParticles(x: number, y: number): void {
+    if (!this.textures.exists('spark')) return;
+    const emitter = this.add.particles(x, y, 'spark', {
+      speed: { min: 20, max: 60 },
+      angle: { min: 240, max: 300 }, // upward fan
+      lifespan: 600,
+      scale: { start: 0.6, end: 0 },
+      gravityY: -30,
+      tint: [0x86efac, 0x34d399, 0xfff3c4],
+      emitting: false,
+    });
+    emitter.explode(14, x, y);
+    this.time.delayedCall(800, () => emitter.destroy());
+  }
+
+  /** Public celebration burst (community milestone) — driven from React. */
+  celebrate(): void {
+    if (this.isReducedMotion()) return;
+    const y = this.currentTopY() - 40;
+    this.spawnSuccessParticles(WORLD.centerX, y);
   }
 
   /** Position + speed of the fastest-moving body (the "impact"). */
@@ -568,16 +750,18 @@ export class TowerScene extends Phaser.Scene {
     const newBodyId = this.active ? this.active.bodyId : '';
     this.setPhase('collapsing'); // input stays disabled through restore
 
+    const reduced = this.isReducedMotion();
     const impact = this.impactInfo();
-    if (!this.reducedMotion) {
+    if (!reduced) {
       this.setTimeScale(SLOWMO_SCALE); // brief slow motion
       this.cameras.main.shake(340, Math.min(0.02, 0.005 + impact.speed * 0.0006));
       this.spawnCollapseParticles(impact.x, impact.y, impact.speed);
     }
-    playImpact(impact.speed, this.active?.def.material);
+    // Layered collapse audio (rumble + crack + material impact).
+    playCollapse(impact.speed, this.active?.def.material);
 
     // Let the collapse play, then ALWAYS restore + return control.
-    const delay = this.reducedMotion ? 250 : 1500;
+    const delay = reduced ? 250 : 1500;
     this.time.delayedCall(delay, () => {
       try {
         this.resetTimeScale();
@@ -609,5 +793,37 @@ export class TowerScene extends Phaser.Scene {
     );
     this.focusY = Phaser.Math.Linear(this.focusY, target, 0.08);
     this.cameras.main.centerOn(WORLD.centerX, this.focusY + 140);
+
+    // Controlled zoom: ease outward as the tower grows so the whole build stays
+    // in frame, capped so it never becomes tiny. Smoothed to avoid any lurch.
+    const towerHeight = Math.max(0, WORLD.platformTopY - this.currentTopY());
+    const targetZoom = Phaser.Math.Clamp(1 - towerHeight / 2600, 0.72, 1);
+    this.zoomLevel = Phaser.Math.Linear(this.zoomLevel, targetZoom, 0.05);
+    this.cameras.main.setZoom(this.baseZoom * this.zoomLevel);
+  }
+
+  /**
+   * Stability "tension" feedback: while the tower settles, draw a ring on the
+   * active body whose intensity tracks how much the tower is still moving —
+   * calmer as it stabilises. Faint by design so it never obscures the tower.
+   */
+  private drawTension(): void {
+    const g = this.tensionGfx;
+    if (!g) return;
+    g.clear();
+    if (this.phase !== 'settling' || !this.active || this.isReducedMotion()) return;
+
+    let motion = 0;
+    for (const m of this.sampleMotions()) {
+      motion += Math.abs(m.vx) + Math.abs(m.vy) + Math.abs(m.angularVelocity) * 6;
+    }
+    const tension = Phaser.Math.Clamp(motion / 24, 0, 1);
+    if (tension < 0.05) return;
+    const b = this.active.body;
+    const r = Math.max(this.active.def.shape.width, this.active.def.shape.height) / 2 + 6;
+    // Warm (calm) → hot (wobbly), low alpha throughout.
+    const color = tension > 0.6 ? 0xf87171 : tension > 0.3 ? 0xfbbf24 : 0x86efac;
+    g.lineStyle(2, color, 0.25 + tension * 0.4);
+    g.strokeCircle(b.position.x, b.position.y, r + tension * 5);
   }
 }
