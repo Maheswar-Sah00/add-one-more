@@ -10,12 +10,6 @@
       },
       "game": {
         "entry": "game.html"
-      },
-      "sandbox": {
-        "entry": "sandbox.html"
-      },
-      "gallery": {
-        "entry": "gallery.html"
       }
     }
   },

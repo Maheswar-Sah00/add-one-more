@@ -4,12 +4,21 @@
  * them and they stay unit-testable. No external links, no Reddit logos: this is
  * plain text/markdown describing the game.
  */
-import { getModifier } from './modifiers';
-
 /** Day 1 of "One More Thing". Day numbers are computed relative to this (UTC). */
-export const LAUNCH_DAY_KEY = '2026-07-01';
+export const LAUNCH_DAY_KEY = '2026-07-20';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The next UTC-midnight boundary (ms epoch) strictly after `now`. Daily towers
+ * end here, so the reset always lands at 00:00 UTC — aligned with the UTC day
+ * key the game already uses (Reddit's backend clock is UTC). This is what makes
+ * the countdown a real, predictable daily reset rather than "24h from creation".
+ */
+export function nextUtcMidnight(now: number): number {
+  const d = new Date(now);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1, 0, 0, 0, 0);
+}
 
 /** The 1-based day number for a given day key, relative to launch. */
 export function dayNumber(dayKey: string, launch: string = LAUNCH_DAY_KEY): number {
@@ -19,9 +28,9 @@ export function dayNumber(dayKey: string, launch: string = LAUNCH_DAY_KEY): numb
   return Math.max(1, Math.floor((d - l) / DAY_MS) + 1);
 }
 
-/** e.g. "Day 16: Can we add one more thing? — Low Gravity". */
-export function buildPostTitle(day: number, modifierId: string): string {
-  return `Day ${day}: Can we add one more thing? — ${getModifier(modifierId).label}`;
+/** e.g. "Day 1: balance 1 more object". */
+export function buildPostTitle(day: number): string {
+  return `Day ${day}: balance 1 more object`;
 }
 
 /**
@@ -29,17 +38,14 @@ export function buildPostTitle(day: number, modifierId: string): string {
  * markdown and points readers to open the interactive post — with no external
  * links and no dependency on comments.
  */
-export function buildPostTextFallback(opts: { day: number; modifierId: string }): string {
-  const mod = getModifier(opts.modifierId);
+export function buildPostTextFallback(opts: { day: number }): string {
   return [
     `**One More Thing — Day ${opts.day}**`,
-    '',
-    `Today's modifier: **${mod.label}** — ${mod.description}`,
     '',
     'How it works:',
     '',
     '- Everyone is building the same daily tower.',
-    '- Each person may add one successful object.',
+    '- Each person can add up to three successful objects.',
     '- Successful placements become part of the next player’s challenge.',
     '- Open this post in a supported Reddit app (iOS, Android, or new web) to play the interactive tower.',
     '- The tower resets daily.',

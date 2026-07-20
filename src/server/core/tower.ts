@@ -12,6 +12,7 @@ import type {
 } from '../../shared/types';
 import { milestoneIdsUpTo, newlyReached, type Milestone } from '../../shared/milestones';
 import { pickDailyModifier } from '../../shared/modifiers';
+import { nextUtcMidnight } from '../../shared/post';
 import { asNumber, asString, asStringArray, isRecord, numStr, safeParse } from './json';
 import { k } from './keys';
 import { advanceAllTime, loadAllTime, serializeAllTime } from './leaderboards';
@@ -86,7 +87,9 @@ function buildInitialMeta(postId: string, now: number): TowerMeta {
     modifierId: pickDailyModifier(dayKey).id,
     themeId: 'warehouse',
     createdAt: now,
-    endsAt: now + RULES.towerDurationMs,
+    // Reset lands at the next 00:00 UTC — a real daily boundary, not 24h from
+    // creation. (The first tower of a day is therefore a partial day.)
+    endsAt: nextUtcMidnight(now),
     finalizedAt: 0,
     height: 0,
     successfulPlacements: 0,

@@ -89,35 +89,35 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
   // ---------- SAFE ----------
   {
     id: 'box', name: 'Cardboard Box', difficulty: 'safe', baseScore: 100,
-    shape: { kind: 'rect', width: 48, height: 44 },
+    shape: { kind: 'rect', width: 54, height: 40 },
     scale: 1, fill: 0xc8a45a, stroke: 0x8a6d33, material: 'fabric',
     safeRotationDeg: 22, spawnOffsetY: 0, ...FABRIC,
     blurb: 'An honest box. Nothing to prove.',
   },
   {
     id: 'book', name: 'Hardback Book', difficulty: 'safe', baseScore: 100,
-    shape: { kind: 'rect', width: 96, height: 24 },
+    shape: { kind: 'rect', width: 64, height: 37 },
     scale: 1, fill: 0x3f7d6e, stroke: 0x1f3f38, material: 'fabric',
     safeRotationDeg: 20, spawnOffsetY: 0, ...FABRIC, restitution: 0.02,
     blurb: 'Wide, flat, forgiving. The responsible choice.',
   },
   {
     id: 'brick', name: 'Clay Brick', difficulty: 'safe', baseScore: 100,
-    shape: { kind: 'rect', width: 58, height: 32 },
+    shape: { kind: 'rect', width: 66, height: 28 },
     scale: 1, fill: 0xb5613b, stroke: 0x6e3722, material: 'ceramic',
     safeRotationDeg: 25, spawnOffsetY: 0, ...CERAMIC,
     blurb: 'Heavy and honest. A good foundation stone.',
   },
   {
     id: 'cushion', name: 'Sofa Cushion', difficulty: 'safe', baseScore: 100,
-    shape: { kind: 'rect', width: 74, height: 42 },
+    shape: { kind: 'rect', width: 83, height: 38 },
     scale: 1, fill: 0x9d6ea3, stroke: 0x5f3f64, material: 'fabric',
     safeRotationDeg: 24, spawnOffsetY: 0, ...FABRIC, friction: 1.1, frictionStatic: 1.3,
     blurb: 'Soft, grippy, and weirdly reliable.',
   },
   {
     id: 'tray', name: 'Cafeteria Tray', difficulty: 'safe', baseScore: 100,
-    shape: { kind: 'rect', width: 104, height: 14 },
+    shape: { kind: 'rect', width: 66, height: 22 },
     scale: 1, fill: 0x7d97a8, stroke: 0x465967, material: 'plastic',
     safeRotationDeg: 18, spawnOffsetY: 0, ...PLASTIC, restitution: 0.06,
     blurb: 'A flat little bridge for braver things.',
@@ -127,7 +127,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
   {
     id: 'chair', name: 'Wooden Chair', difficulty: 'risky', baseScore: 175,
     shape: {
-      kind: 'compound', width: 56, height: 72,
+      kind: 'compound', width: 59, height: 68,
       parts: [
         { offsetX: 0, offsetY: -6, width: 48, height: 12 }, // seat
         { offsetX: -18, offsetY: -32, width: 12, height: 44 }, // back
@@ -142,7 +142,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
   {
     id: 'lamp', name: 'Desk Lamp', difficulty: 'risky', baseScore: 175,
     shape: {
-      kind: 'compound', width: 56, height: 74,
+      kind: 'compound', width: 60, height: 69,
       parts: [
         { offsetX: 0, offsetY: 32, width: 46, height: 10 }, // base
         { offsetX: 0, offsetY: 2, width: 8, height: 52 }, // stem
@@ -162,7 +162,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
   },
   {
     id: 'television', name: 'Old Television', difficulty: 'risky', baseScore: 175,
-    shape: { kind: 'rect', width: 74, height: 56 },
+    shape: { kind: 'rect', width: 75, height: 55 },
     scale: 1, fill: 0x4b5563, stroke: 0x262b33, material: 'glass',
     safeRotationDeg: 14, spawnOffsetY: 4, ...GLASS,
     blurb: 'A cube of pure center-of-gravity anxiety.',
@@ -170,7 +170,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
   {
     id: 'plant', name: 'Potted Plant', difficulty: 'risky', baseScore: 175,
     shape: {
-      kind: 'compound', width: 52, height: 76,
+      kind: 'compound', width: 55, height: 72,
       parts: [
         { offsetX: 0, offsetY: 20, width: 40, height: 34 }, // pot
         { offsetX: 0, offsetY: -2, width: 50, height: 10 }, // rim
@@ -185,7 +185,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
   // ---------- ABSURD ----------
   {
     id: 'fridge', name: 'Refrigerator', difficulty: 'absurd', baseScore: 275,
-    shape: { kind: 'rect', width: 78, height: 122 },
+    shape: { kind: 'rect', width: 92, height: 104 },
     scale: 1, fill: 0xd8dbe2, stroke: 0x8a8f9c, material: 'metal',
     safeRotationDeg: 8, spawnOffsetY: 12, ...METAL, density: 0.0022,
     blurb: 'Absolutely not. And yet — the community demands it.',
@@ -193,7 +193,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
   {
     id: 'sofa', name: 'Two-Seat Sofa', difficulty: 'absurd', baseScore: 275,
     shape: {
-      kind: 'compound', width: 132, height: 66,
+      kind: 'compound', width: 130, height: 67,
       parts: [
         { offsetX: 0, offsetY: 14, width: 120, height: 28 }, // base
         { offsetX: 0, offsetY: -14, width: 104, height: 26 }, // backrest
@@ -208,7 +208,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
   {
     id: 'bathtub', name: 'Cast-Iron Bathtub', difficulty: 'absurd', baseScore: 275,
     shape: {
-      kind: 'compound', width: 108, height: 62,
+      kind: 'compound', width: 122, height: 55,
       parts: [
         { offsetX: 0, offsetY: 24, width: 96, height: 16 }, // floor
         { offsetX: -47, offsetY: 2, width: 14, height: 48 }, // left wall
@@ -222,7 +222,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
   {
     id: 'canoe', name: 'Fibreglass Canoe', difficulty: 'absurd', baseScore: 275,
     shape: {
-      kind: 'poly', width: 128, height: 32,
+      kind: 'poly', width: 137, height: 30,
       vertices: [
         { x: -64, y: -6 },
         { x: -44, y: -18 },
@@ -239,7 +239,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
   {
     id: 'duck', name: 'Giant Rubber Duck', difficulty: 'absurd', baseScore: 275,
     shape: {
-      kind: 'compound', width: 104, height: 92,
+      kind: 'compound', width: 99, height: 96,
       parts: [
         { offsetX: -6, offsetY: 12, width: 72, height: 60 }, // body
         { offsetX: 30, offsetY: -28, width: 34, height: 34 }, // head

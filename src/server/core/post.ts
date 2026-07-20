@@ -1,7 +1,6 @@
 import { reddit } from '@devvit/web/server';
-import { RULES } from '../../shared/config';
 import { pickDailyModifier } from '../../shared/modifiers';
-import { buildPostTextFallback, buildPostTitle, dayNumber } from '../../shared/post';
+import { buildPostTextFallback, buildPostTitle, dayNumber, nextUtcMidnight } from '../../shared/post';
 
 function todayDayKey(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
@@ -21,15 +20,15 @@ export const createPost = async () => {
   const modifier = pickDailyModifier(dayKey);
 
   return await reddit.submitCustomPost({
-    title: buildPostTitle(day, modifier.id),
+    title: buildPostTitle(day),
     // `entry` defaults to the `default` entrypoint (splash.html) — the inline,
     // interactive game surface. No external links, no Reddit-logo imagery.
-    textFallback: { text: buildPostTextFallback({ day, modifierId: modifier.id }) },
+    textFallback: { text: buildPostTextFallback({ day }) },
     postData: {
       dayNumber: day,
       dayKey,
       modifierId: modifier.id,
-      endsAt: now + RULES.towerDurationMs,
+      endsAt: nextUtcMidnight(now),
     },
   });
 };

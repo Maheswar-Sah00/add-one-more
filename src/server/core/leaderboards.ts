@@ -136,7 +136,8 @@ export function previousDayKey(dayKey: string): string {
 /**
  * Roll a player's all-time record forward for a new successful placement on
  * `dayKey`. Streak increments on consecutive days, resets otherwise, and stays
- * put for a same-day repeat (defensive — one success/day is enforced elsewhere).
+ * put for a same-day repeat — so a player's 2nd/3rd placement of the day counts
+ * toward totals/absurd but never inflates the day streak.
  */
 export function advanceAllTime(
   prev: AllTimeRecord,
