@@ -23,6 +23,12 @@ export const k = {
   lbAbsurd: (): string => `lb:absurd`,
   lbStreak: (): string => `lb:streak`,
   lbAllTime: (): string => `lb:alltime`,
+  /** Permanent all-time POINTS board: member = userId, score = lifetime points. */
+  lbPoints: (): string => `lb:points`,
+  /** A user's cumulative all-time points (authoritative counter). */
+  userPoints: (userId: string): string => `user:${userId}:points`,
+  /** A user's daily drop quota: hash { dayKey, count } — resets each UTC day. */
+  userDaily: (userId: string): string => `user:${userId}:daily`,
   /** Global userId -> username map, so leaderboards resolve names without ids. */
   names: (): string => `user:names`,
   /** Global per-user all-time bookkeeping (streak, totals, last active day). */

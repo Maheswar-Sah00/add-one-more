@@ -28,9 +28,9 @@ export function dayNumber(dayKey: string, launch: string = LAUNCH_DAY_KEY): numb
   return Math.max(1, Math.floor((d - l) / DAY_MS) + 1);
 }
 
-/** e.g. "Day 1: balance 1 more object". */
+/** e.g. "Day 1: can you add one more thing?". */
 export function buildPostTitle(day: number): string {
-  return `Day ${day}: balance 1 more object`;
+  return `Day ${day}: can you add one more thing?`;
 }
 
 /**

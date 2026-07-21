@@ -12,8 +12,9 @@
  */
 import Phaser from 'phaser';
 import { WORLD } from '../../shared/config';
-import { getObjectDef, type GameObjectDef } from '../../shared/objects';
-import type { PersistedBodyState } from '../../shared/types';
+import { CATEGORY_POINTS, getObjectDef, type GameObjectDef } from '../../shared/objects';
+import type { Difficulty, PersistedBodyState } from '../../shared/types';
+import { DropAudio } from '../audio/dropSounds';
 import { OBJECT_ART } from '../objectArt';
 import {
   ensureDustTexture,
@@ -31,14 +32,23 @@ type MatterImage = Phaser.Physics.Matter.Image;
 
 const PLATFORM_TOP = WORLD.platformTopY; // the ground surface objects rest on
 const PLATFORM_THICK = 20; // the ground is a thick line, not a tall box
-const MIN_VISIBLE_SPAN = 150; // TEMP TEST
+const MIN_VISIBLE_SPAN = 440; // fixed window of world height the camera frames; taller towers follow the top
 const HOVER_GAP = 190; // how far above the tower the object hovers — a real, visible fall
-const STABLE_HOLD = 420; // ms of continuous calm required for success
-const MIN_SETTLE = 350; // ms minimum before we can call success
-const MAX_SETTLE = 3000; // ms hard cap on the check
+const STABLE_HOLD = 380; // ms the object must stay genuinely at rest before it commits
+const MIN_SETTLE = 320; // ms minimum before we can call success
+const MAX_SETTLE = 5000; // ms hard cap — give the object real time to stop rolling/settling
+const REST_SPEED = 0.32; // Matter linear speed below which the body counts as "stopped"
+const REST_SPIN = 0.03; // Matter angular speed below which the body counts as "not turning"
 const IMPACT_MIN_SPEED = 1.6; // matter speed to spawn impact stars
 const SHAKE_MIN_SPEED = 4.5;
 const ART_TARGET_PX = 512; // supersample art textures to ~this many px on the long side for crisp zoom
+
+/** Vivid per-tier colours for the floating "+points" pop (kept in sync with the overlay). */
+const CATEGORY_TEXT: Record<Difficulty, string> = {
+  safe: '#2f8fd8',
+  risky: '#e6a91e',
+  absurd: '#e8794a',
+};
 
 export class TowerScene extends Phaser.Scene {
   private bridge!: Phaser.Events.EventEmitter;
@@ -51,6 +61,7 @@ export class TowerScene extends Phaser.Scene {
   private newObj: MatterImage | null = null;
   private newDef: GameObjectDef | null = null;
 
+  private dropAudio!: DropAudio;
   private guide!: Phaser.GameObjects.Graphics;
   private starEmitters: Phaser.GameObjects.Particles.ParticleEmitter[] = [];
   private dustEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
@@ -63,8 +74,6 @@ export class TowerScene extends Phaser.Scene {
   private calmSince = 0;
   private lastImpact = 0;
   private squashed = false;
-  private dropTopY = 0;
-  private lastNewPos = { x: 0, y: 0 };
 
   constructor() {
     super('tower');
@@ -79,6 +88,7 @@ export class TowerScene extends Phaser.Scene {
     this.matter.world.autoUpdate = true;
     this.cameras.main.setBackgroundColor(PALETTE.cream);
 
+    this.dropAudio = new DropAudio(this);
     this.buildPlatform();
     this.buildParticles();
 
@@ -97,25 +107,30 @@ export class TowerScene extends Phaser.Scene {
     this.bridge.on('select', (p: { id: string }) => this.onSelect(p.id));
     this.bridge.on('rotate', (p: { dir: -1 | 1 }) => this.onRotate(p.dir));
     this.bridge.on('drop', () => this.onDrop());
+    // Sound-effects mute toggle from the overlay (does not play anything).
+    this.bridge.on('sfxMuted', (m: boolean) => this.dropAudio.setMuted(m));
+    this.bridge.on('sfxVolume', (v: number) => this.dropAudio.setVolume(v));
 
     this.scale.on('resize', () => this.frameTower(this.phase === 'PLACING', false));
 
-    // Load any bundled object artwork, THEN build the tower + start play (so the
-    // first objects already have their real textures).
-    this.loadObjectArt(() => {
+    // Preload bundled artwork + drop sounds, THEN build the tower + start play.
+    // Preloading NEVER plays audio.
+    this.loadAssets(() => {
       this.rebuildTower();
       this.time.delayedCall(250, () => this.enterChoosing());
     });
   }
 
-  /** Preload the bundled per-object PNGs as `art-<id>` textures. */
-  private loadObjectArt(done: () => void): void {
-    const pending = Object.entries(OBJECT_ART).filter(([id]) => !this.textures.exists(`art-${id}`));
-    if (pending.length === 0) {
+  /** Queue the per-object PNGs (`art-<id>`) and drop sounds (`drop-<id>`), then build. */
+  private loadAssets(done: () => void): void {
+    for (const [id, url] of Object.entries(OBJECT_ART)) {
+      if (!this.textures.exists(`art-${id}`)) this.load.image(`art-${id}`, url);
+    }
+    this.dropAudio.preload();
+    if (this.load.list.size === 0) {
       done();
       return;
     }
-    for (const [id, url] of pending) this.load.image(`art-${id}`, url);
     this.load.once(Phaser.Loader.Events.COMPLETE, () => done());
     this.load.start();
   }
@@ -304,21 +319,25 @@ export class TowerScene extends Phaser.Scene {
   }
 
   private onDrop(): void {
-    if (this.phase !== 'PLACING' || !this.newObj) return;
+    // THE drop-sound trigger. Reached only from the DROP command while actively
+    // placing a real object; the phase immediately flips to DROPPING below, so
+    // this body runs EXACTLY ONCE per drop. Nothing about selection, dragging,
+    // hovering, collisions, tower loading, or server sync passes through here.
+    if (this.phase !== 'PLACING' || !this.newObj || !this.newDef) return;
     this.consumeHint();
     this.guide.clear();
-    this.dropTopY = this.towerTopY(); // the surface the object must land on
     // A small "let go" puff of dust so the release reads as a deliberate action;
     // then gravity does the rest — a real accelerating fall from the hover height.
     this.dustEmitter.emitParticleAt(this.newObj.x, this.newObj.getBounds().bottom, 4);
     this.newObj.setIgnoreGravity(false);
     this.newObj.setVelocity(0, 1); // nudge it off rest so gravity accelerates it in
     this.setPhase('DROPPING');
+    // Play this object's unique drop sound — once, here at the commit. Deliberately
+    // NOT in the collision handler (which fires repeatedly). Fails silently.
+    this.dropAudio.play(this.newDef.id);
     this.dropAt = this.time.now;
     this.calmSince = 0;
     this.squashed = false;
-    const b = this.newObj.body as MatterJS.BodyType;
-    this.lastNewPos = { x: b.position.x, y: b.position.y };
   }
 
   private onStable(): void {
@@ -348,15 +367,80 @@ export class TowerScene extends Phaser.Scene {
       this.tweens.add({ targets: landed, scaleX: 1.1, scaleY: 1.1, duration: 140, yoyo: true, ease: 'Quad.easeOut' });
     }
     this.sparkle(rest.x, rest.y);
+    this.dropAudio.playCue('success'); // IT'S IN — plays once, with the banner
+
+    // Award points for the placement — by risk tier (safe 100 / risky 250 /
+    // absurd 500). A "+N" pops up from the landed object and floats away, and the
+    // overlay HUD/leaderboard learn the delta via the bridge.
+    const def = getObjectDef(rest.defId);
+    const difficulty: Difficulty = def ? def.difficulty : 'safe';
+    const points = CATEGORY_POINTS[difficulty];
+    const landedTop = landed ? landed.getBounds().top : rest.y;
+    this.floatPoints(rest.x, landedTop, points, difficulty);
+    // A resolved SUCCESSFUL drop: award points and persist the settled body.
+    // (Event name is 'resolved' — NOT 'drop', which is the React→scene command.)
+    this.bridge.emit('resolved', {
+      success: true,
+      points,
+      body: {
+        objectId: rest.defId,
+        x: rest.x,
+        y: rest.y,
+        angle: rest.angle,
+        scaleX: rest.scaleX,
+        scaleY: rest.scaleY,
+      },
+    });
+
     this.bridge.emit('count', this.accepted.length);
     this.bridge.emit('result', { success: true });
     this.time.delayedCall(1050, () => this.enterChoosing());
+  }
+
+  /**
+   * A "+N" points burst that rises from the landing spot and fades — drawn in
+   * world space so it stays pinned to the object as the camera settles. Purely
+   * cosmetic; the authoritative tally lives in the React overlay.
+   */
+  private floatPoints(x: number, y: number, points: number, difficulty: Difficulty): void {
+    const color = CATEGORY_TEXT[difficulty];
+    const label = this.add
+      .text(x, y - 8, `+${points}`, {
+        fontFamily: '"Baloo 2", "Nunito", system-ui, sans-serif',
+        fontSize: '38px',
+        fontStyle: '900',
+        color,
+        stroke: '#ffffff',
+        strokeThickness: 6,
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(30)
+      .setScale(0.4);
+
+    this.tweens.add({
+      targets: label,
+      scale: 1,
+      duration: 220,
+      ease: 'Back.easeOut',
+    });
+    this.tweens.add({
+      targets: label,
+      y: y - 96,
+      alpha: 0,
+      duration: 1000,
+      delay: 240,
+      ease: 'Cubic.easeIn',
+      onComplete: () => label.destroy(),
+    });
   }
 
   private onCollapse(): void {
     if (this.phase === 'COLLAPSE') return;
     this.setPhase('COLLAPSE');
     this.cameras.main.shake(240, 0.007);
+    this.dropAudio.playCue('collapse'); // NOT THIS TIME — plays once, with the banner
+    // A failed drop still spends one of the day's drops (0 points, nothing saved).
+    this.bridge.emit('resolved', { success: false, points: 0 });
     this.bridge.emit('result', { success: false });
     // The failed object (dynamic) tumbles away; then restore the last stable tower.
     this.time.delayedCall(1250, () => {
@@ -394,24 +478,31 @@ export class TowerScene extends Phaser.Scene {
 
     if (this.phase === 'DROPPING' && elapsed > 240) this.setPhase('CHECKING');
 
-    // Settle detection by the dropped object's own per-frame displacement.
-    const move = Math.hypot(b.position.x - this.lastNewPos.x, b.position.y - this.lastNewPos.y);
-    this.lastNewPos = { x: b.position.x, y: b.position.y };
-
-    const MOVE_EPS = 0.6; // px/frame
-    if (move < MOVE_EPS) {
+    // Wait for the object to GENUINELY come to rest before committing — not just
+    // "barely moving". We require its real linear AND angular speed to stay below
+    // a small threshold continuously (sleeping is disabled, so body.speed is
+    // accurate). A still-falling, sliding, rolling or wobbling object never meets
+    // this, so "IT'S IN" only fires once physics has actually settled it.
+    const speed = b.speed ?? Math.hypot(b.velocity.x, b.velocity.y);
+    const spin = Math.abs(b.angularSpeed ?? b.angularVelocity ?? 0);
+    const atRest = speed < REST_SPEED && spin < REST_SPIN;
+    if (atRest) {
       if (this.calmSince === 0) this.calmSince = now;
     } else {
-      this.calmSince = 0;
+      this.calmSince = 0; // any renewed motion resets the timer
     }
 
-    const calmEnough = this.calmSince > 0 && now - this.calmSince > STABLE_HOLD;
-    if ((elapsed > MIN_SETTLE && calmEnough) || elapsed > MAX_SETTLE) {
-      // Success only if it actually came to rest ON the surface — not floating
-      // above it, and not slid down beside it.
-      const bottom = this.newObj.getBounds().bottom;
-      const landed = bottom >= this.dropTopY - 15 && bottom <= this.dropTopY + 45;
-      this.resolveDrop(landed);
+    const restedLongEnough = this.calmSince > 0 && now - this.calmSince > STABLE_HOLD;
+    if (elapsed > MIN_SETTLE && restedLongEnough) {
+      // It stopped moving while still on the tower → success. (It can't be
+      // floating: a body in mid-air is never at rest under gravity.)
+      this.resolveDrop(true);
+      return;
+    }
+    if (elapsed > MAX_SETTLE) {
+      // Safety cap: if it still hasn't settled after this long, only accept it if
+      // it happens to be momentarily at rest now, otherwise treat as a failure.
+      this.resolveDrop(atRest);
     }
   }
 
@@ -447,8 +538,12 @@ export class TowerScene extends Phaser.Scene {
   private dragTo(p: Phaser.Input.Pointer): void {
     if (this.phase !== 'PLACING' || !this.newObj || !this.newDef) return;
     const half = (this.newDef.shape.width * this.newDef.scale) / 2;
-    const wx = p.worldX;
-    const x = Phaser.Math.Clamp(wx, WORLD.minX + half, WORLD.maxX - half);
+    // Clamp to the intersection of the world bounds and what's actually on screen,
+    // so the object stays visible while aiming (the camera keeps a constant zoom).
+    const wv = this.cameras.main.worldView;
+    const lo = Math.max(WORLD.minX + half, wv.left + half + 6);
+    const hi = Math.min(WORLD.maxX - half, wv.right - half - 6);
+    const x = Phaser.Math.Clamp(p.worldX, Math.min(lo, hi), Math.max(lo, hi));
     this.newObj.setPosition(x, this.newObj.y);
     this.consumeHint();
   }
@@ -536,8 +631,13 @@ export class TowerScene extends Phaser.Scene {
     return top;
   }
 
-  /** Horizontal + top extent of what must be framed (tower + platform). */
-  private contentBounds(includePlay: boolean): { left: number; right: number; top: number } {
+  /**
+   * Horizontal + top extent to frame (platform + tower). Deliberately does NOT
+   * widen to the full play area during aiming — that would force a zoom-out and
+   * lose focus on the top. The visible width already spans the platform, and the
+   * drag is clamped to what's on screen (see dragTo).
+   */
+  private contentBounds(): { left: number; right: number; top: number } {
     let left = WORLD.centerX - (WORLD.platformWidth + 40) / 2;
     let right = WORLD.centerX + (WORLD.platformWidth + 40) / 2;
     let top: number = WORLD.platformTopY;
@@ -546,10 +646,6 @@ export class TowerScene extends Phaser.Scene {
       left = Math.min(left, b.left);
       right = Math.max(right, b.right);
       top = Math.min(top, b.top);
-    }
-    if (includePlay) {
-      left = Math.min(left, WORLD.minX - 10);
-      right = Math.max(right, WORLD.maxX + 10);
     }
     return { left, right, top };
   }
@@ -560,7 +656,7 @@ export class TowerScene extends Phaser.Scene {
     const vh = this.scale.height;
     if (vw < 2 || vh < 2) return;
 
-    const { left, right, top: rawTop } = this.contentBounds(placing);
+    const { left, right, top: rawTop } = this.contentBounds();
     const platformBottom = PLATFORM_TOP + PLATFORM_THICK;
     const headroom = placing && this.newDef ? this.newDef.shape.height * this.newDef.scale + HOVER_GAP + 50 : 46;
     const top = rawTop - headroom;
@@ -593,11 +689,6 @@ export class TowerScene extends Phaser.Scene {
       // platform) slide off the bottom of the screen, keeping focus up top.
       scrollY = top - vh / 2 - (topInset - vh / 2) / zoom;
     }
-    (window as unknown as { __cam?: unknown }).__cam = {
-      placing, fullSpan: Math.round(fullSpan), contentW: Math.round(contentW),
-      zoom: +zoom.toFixed(2), follow, thresh: Math.round(platformScreenY - topInset),
-    };
-
     if (animate) {
       this.tweens.add({ targets: cam, zoom, scrollX, scrollY, duration: 400, ease: 'Cubic.easeInOut' });
     } else {

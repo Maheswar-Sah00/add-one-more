@@ -1,27 +1,39 @@
-## Devvit React Starter
+# One More Tower
 
-A starter to build web applications on Reddit's developer platform
+A daily, community-built stacking game for Reddit. Everyone contributes to the
+**same** tower — one object at a time, up to three drops a day. Balance it,
+don't topple it, and climb the all-time leaderboard.
 
-- [Devvit](https://developers.reddit.com/): A way to build and deploy immersive games on Reddit
-- [Vite](https://vite.dev/): For compiling the webView
-- [React](https://react.dev/): For UI
-- [Hono](https://hono.dev/): For backend logic
-- [Tailwind](https://tailwindcss.com/): For styles
-- [TypeScript](https://www.typescriptlang.org/): For type safety
+## How to play
 
-## Getting Started
+1. Tap **ENTER** on the post to open the tower.
+2. Pick an object — **Safe** (+100), **Risky** (+250), or **Absurd** (+500 points).
+3. Drag to aim, rotate, then **DROP**.
+4. If it lands and the tower stays standing, it's saved as part of the shared
+   tower for the next player.
+5. You get **3 drops per day** — every drop counts, even a wobble that falls.
+   The quota resets at **00:00 UTC**, and a live timer counts down to the reset.
 
-> Make sure you have Node 22 downloaded on your machine before running!
+## Scoring & leaderboard
 
-1. Run `npm create devvit@latest --template=react`
-2. Go through the installation wizard. You will need to create a Reddit account and connect it to Reddit developers
-3. Copy the command on the success page into your terminal
+- Bolder objects are worth more points, so risk is rewarded.
+- Your points add to a **permanent, all-time leaderboard** of real Reddit
+  players — updated live as everyone plays.
+- The community tower persists: it keeps growing across sessions.
+
+## Built with
+
+- [Devvit](https://developers.reddit.com/) — Reddit's Developer Platform
+- [Phaser](https://phaser.io/) with Matter.js — physics + rendering
+- [React](https://react.dev/) + [Vite](https://vite.dev/) +
+  [Tailwind](https://tailwindcss.com/) — the web view
+- [Hono](https://hono.dev/) — server logic
+- [TypeScript](https://www.typescriptlang.org/) — type safety
 
 ## Commands
 
-- `npm run dev`: Starts a development server where you can develop your application live on Reddit.
-- `npm run build`: Builds your client and server projects
-- `npm run deploy`: Uploads a new version of your app
-- `npm run launch`: Publishes your app for review
-- `npm run login`: Logs your CLI into Reddit
-- `npm run type-check`: Type checks, lints, and prettifies your app
+- `npm run dev` — playtest live on Reddit
+- `npm run build` — build the client + server bundles
+- `npm run deploy` — type-check, lint, and upload a new version
+- `npm run launch` — deploy, then publish for review
+- `npm run login` — log the CLI into Reddit

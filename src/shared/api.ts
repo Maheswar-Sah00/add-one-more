@@ -37,6 +37,68 @@ export type ArchiveResponse = {
   entries: TowerFinalSummary[];
 };
 
+/** Identity + the viewer's live standing: all-time points, today's remaining
+ *  drops, and when the daily quota resets (next UTC midnight, Reddit-aligned). */
+export type MeResponse = {
+  type: 'me';
+  username: string;
+  userId: string | null;
+  /** Cumulative all-time points (the permanent leaderboard value). */
+  score: number;
+  /** Successful drops the account may still make today (0..3). */
+  dropsRemaining: number;
+  /** Epoch ms of the next daily reset (00:00 UTC). */
+  resetsAt: number;
+  /** Server clock, so the client's countdown stays honest. */
+  now: number;
+};
+
+/** Record the points earned by a successful placement (by risk tier). */
+export type ScoreRequest = {
+  points: number;
+};
+
+/** The viewer's fresh all-time total + remaining daily drops after a placement.
+ *  `accepted` is false when the daily 3-drop quota was already spent. */
+export type ScoreResponse = {
+  type: 'score';
+  username: string;
+  score: number;
+  dropsRemaining: number;
+  resetsAt: number;
+  accepted: boolean;
+};
+
+/** The permanent, all-time points leaderboard (real Reddit players). */
+export type PointsBoardResponse = {
+  type: 'points-board';
+  entries: LeaderboardEntry[];
+};
+
+/** A body in the persisted shared tower — transform only, no owner ids. */
+export type PlacedBody = {
+  objectId: string;
+  x: number;
+  y: number;
+  angle: number;
+  scaleX: number;
+  scaleY: number;
+};
+
+/** The saved shared tower — loaded on entry so the community build persists. */
+export type BuildStateResponse = {
+  type: 'build-state';
+  bodies: PlacedBody[];
+};
+
+/** Append one settled body to the shared tower. */
+export type PlaceBodyRequest = PlacedBody;
+
+export type PlaceBodyResponse = {
+  type: 'placed';
+  bodies: PlacedBody[];
+};
+
 /** A body transform as submitted by the client on commit (no ownership — the
  *  server derives ownership itself so it cannot be spoofed). */
 export type SubmittedBody = {

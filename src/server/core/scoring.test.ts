@@ -18,11 +18,11 @@ import { computeScore, computeScoreBreakdown, heightBonus, modifierBonus } from 
 const PLATFORM = WORLD.platformTopY;
 
 describe('base scores (§13)', () => {
-  it('uses 100 / 175 / 275 for safe / risky / absurd', () => {
+  it('uses 100 / 250 / 500 for safe / risky / absurd', () => {
     // Book = safe, tyre = risky, fridge = absurd. Placed at platform => no height bonus.
     expect(computeScoreBreakdown('book', PLATFORM, opts()).base).toBe(100);
-    expect(computeScoreBreakdown('tyre', PLATFORM, opts()).base).toBe(175);
-    expect(computeScoreBreakdown('fridge', PLATFORM, opts()).base).toBe(275);
+    expect(computeScoreBreakdown('tyre', PLATFORM, opts()).base).toBe(250);
+    expect(computeScoreBreakdown('fridge', PLATFORM, opts()).base).toBe(500);
   });
 });
 
@@ -59,7 +59,7 @@ describe('total = base + height + modifier + milestone', () => {
   it('sums the components', () => {
     const b = computeScoreBreakdown('fridge', PLATFORM - 200, opts({ milestoneReached: true }));
     expect(b.total).toBe(b.base + b.heightBonus + b.modifierBonus + b.milestoneBonus);
-    expect(b.base).toBe(275);
+    expect(b.base).toBe(500);
     expect(b.heightBonus).toBeGreaterThan(0);
     expect(b.milestoneBonus).toBe(SCORING.milestoneBonus);
   });

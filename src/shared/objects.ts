@@ -125,7 +125,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
 
   // ---------- RISKY ----------
   {
-    id: 'chair', name: 'Wooden Chair', difficulty: 'risky', baseScore: 175,
+    id: 'chair', name: 'Wooden Chair', difficulty: 'risky', baseScore: 250,
     shape: {
       kind: 'compound', width: 59, height: 68,
       parts: [
@@ -140,7 +140,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
     blurb: 'Tall and top-heavy. It has opinions about balance.',
   },
   {
-    id: 'lamp', name: 'Desk Lamp', difficulty: 'risky', baseScore: 175,
+    id: 'lamp', name: 'Desk Lamp', difficulty: 'risky', baseScore: 250,
     shape: {
       kind: 'compound', width: 60, height: 69,
       parts: [
@@ -154,21 +154,21 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
     blurb: 'Broad base, wobbly ambitions.',
   },
   {
-    id: 'tyre', name: 'Rubber Tyre', difficulty: 'risky', baseScore: 175,
+    id: 'tyre', name: 'Rubber Tyre', difficulty: 'risky', baseScore: 250,
     shape: { kind: 'circle', width: 64, height: 64, radius: 32 },
     scale: 1, fill: 0x2f333c, stroke: 0x14161b, material: 'rubber',
     safeRotationDeg: 30, spawnOffsetY: 6, ...RUBBER,
     blurb: 'It bounces. It rolls. It regrets nothing.',
   },
   {
-    id: 'television', name: 'Old Television', difficulty: 'risky', baseScore: 175,
+    id: 'television', name: 'Old Television', difficulty: 'risky', baseScore: 250,
     shape: { kind: 'rect', width: 75, height: 55 },
     scale: 1, fill: 0x4b5563, stroke: 0x262b33, material: 'glass',
     safeRotationDeg: 14, spawnOffsetY: 4, ...GLASS,
     blurb: 'A cube of pure center-of-gravity anxiety.',
   },
   {
-    id: 'plant', name: 'Potted Plant', difficulty: 'risky', baseScore: 175,
+    id: 'plant', name: 'Potted Plant', difficulty: 'risky', baseScore: 250,
     shape: {
       kind: 'compound', width: 55, height: 72,
       parts: [
@@ -184,14 +184,14 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
 
   // ---------- ABSURD ----------
   {
-    id: 'fridge', name: 'Refrigerator', difficulty: 'absurd', baseScore: 275,
+    id: 'fridge', name: 'Refrigerator', difficulty: 'absurd', baseScore: 500,
     shape: { kind: 'rect', width: 92, height: 104 },
     scale: 1, fill: 0xd8dbe2, stroke: 0x8a8f9c, material: 'metal',
     safeRotationDeg: 8, spawnOffsetY: 12, ...METAL, density: 0.0022,
     blurb: 'Absolutely not. And yet — the community demands it.',
   },
   {
-    id: 'sofa', name: 'Two-Seat Sofa', difficulty: 'absurd', baseScore: 275,
+    id: 'sofa', name: 'Two-Seat Sofa', difficulty: 'absurd', baseScore: 500,
     shape: {
       kind: 'compound', width: 130, height: 67,
       parts: [
@@ -206,7 +206,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
     blurb: 'It seats two and endangers everyone.',
   },
   {
-    id: 'bathtub', name: 'Cast-Iron Bathtub', difficulty: 'absurd', baseScore: 275,
+    id: 'bathtub', name: 'Cast-Iron Bathtub', difficulty: 'absurd', baseScore: 500,
     shape: {
       kind: 'compound', width: 122, height: 55,
       parts: [
@@ -220,7 +220,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
     blurb: 'An open invitation for smaller objects to nap inside.',
   },
   {
-    id: 'canoe', name: 'Fibreglass Canoe', difficulty: 'absurd', baseScore: 275,
+    id: 'canoe', name: 'Fibreglass Canoe', difficulty: 'absurd', baseScore: 500,
     shape: {
       kind: 'poly', width: 137, height: 30,
       vertices: [
@@ -237,7 +237,7 @@ export const OBJECT_LIBRARY: readonly GameObjectDef[] = [
     blurb: 'Perfectly stable on water. This is not water.',
   },
   {
-    id: 'duck', name: 'Giant Rubber Duck', difficulty: 'absurd', baseScore: 275,
+    id: 'duck', name: 'Giant Rubber Duck', difficulty: 'absurd', baseScore: 500,
     shape: {
       kind: 'compound', width: 99, height: 96,
       parts: [
@@ -265,6 +265,18 @@ export function objectsByTier(tier: Difficulty): readonly GameObjectDef[] {
 }
 
 export const DIFFICULTY_ORDER: readonly Difficulty[] = ['safe', 'risky', 'absurd'];
+
+/**
+ * Points awarded for a successful placement, by risk tier. This is the single
+ * source of truth for the tier values: every object's `baseScore` matches its
+ * tier here, the client's floating-points animation reads it, and the server's
+ * authoritative score builds on it. Bolder objects, bigger reward.
+ */
+export const CATEGORY_POINTS: Record<Difficulty, number> = {
+  safe: 100,
+  risky: 250,
+  absurd: 500,
+};
 
 /**
  * Validate every definition: finite numbers, positive sizes, well-formed shapes,

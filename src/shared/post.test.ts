@@ -21,8 +21,8 @@ describe('day number', () => {
 
 describe('post title', () => {
   it('is the plain day-numbered call to action (no modifier)', () => {
-    expect(buildPostTitle(1)).toBe('Day 1: balance 1 more object');
-    expect(buildPostTitle(7)).toBe('Day 7: balance 1 more object');
+    expect(buildPostTitle(1)).toBe('Day 1: can you add one more thing?');
+    expect(buildPostTitle(7)).toBe('Day 7: can you add one more thing?');
   });
 });
 

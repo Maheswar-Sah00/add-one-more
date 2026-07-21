@@ -250,8 +250,8 @@ describe('server-controlled scoring — client cannot manipulate the score', () 
     const body = await rec(res);
     if (res.status === 200) {
       // fridge WAS issued as the absurd option — then the score must be its real
-      // base (275) + height, never a client value.
-      expect(asNumber(body.score, -1)).toBe(275 + 20);
+      // base (500) + height, never a client value.
+      expect(asNumber(body.score, -1)).toBe(500 + 20);
     } else {
       expect(res.status).toBe(400);
       expect(asString(body.code)).toBe('validation-failed');
